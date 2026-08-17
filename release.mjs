@@ -66,6 +66,8 @@ import { createInterface } from 'node:readline/promises'
  *   commitMessage   string   release commit subject
  *   releaseTitle    string   GitHub release title
  *   assets          string[] files attached to the GitHub release
+ *   notesFile       string   write the resolved release notes here, for a build tool that
+ *                            takes them as a file (goreleaser --release-notes, and similar)
  *   versioning      string   how `auto` derives a bump: "conventional", or
  *                            always-patch / always-minor / always-major to never infer
  *   assistant       string|object  drafting CLI for commit messages and notes. A key of
@@ -107,6 +109,7 @@ const DEFAULTS = {
   releaseTitle: '%t',
   assets: [],
   assistant: null,
+  notesFile: null,
   versioning: 'conventional',
 }
 
@@ -148,6 +151,7 @@ Flags:
   --dist-tag <name>    override the npm dist-tag (default: derived from the version)
   --dry-run            print every step and execute nothing
   --yes, -y            skip the confirmation prompt
+  --notes-file <path>  write the resolved release notes to a file for the next tool
   --assistant <name>   drafting CLI to use: auto, none, claude, codex
   --assistant-model <name>
                        model the assistant runs with (e.g. sonnet, opus)
@@ -901,6 +905,7 @@ const skippedSteps = option('--skip')
 const explicitDistTag = option('--dist-tag')
 const requestedPreid = option('--preid')
 const autoCommit = flag('--commit')
+const requestedNotesFile = option('--notes-file')
 const requestedAssistant = option('--assistant')
 const requestedModel = option('--assistant-model')
 const requestedEffort = option('--assistant-effort')
@@ -969,6 +974,7 @@ const VALUE_OPTIONS = new Set([
   '--skip',
   '--preid',
   '--dist-tag',
+  '--notes-file',
   '--assistant',
   '--assistant-model',
   '--assistant-effort',
@@ -1676,6 +1682,20 @@ if (staged.length) {
   step('Commit')
   mutate('git', ['add', '--', ...staged])
   mutate('git', ['commit', '-m', expand(config.commitMessage)])
+}
+
+/**
+ * Hand the notes to whatever builds and publishes next. goreleaser, cargo-dist and similar
+ * take release notes as a file and then own the GitHub release themselves.
+ *
+ * The notes are also in the annotated tag, but reading them back with `%(contents)` embeds
+ * the signature when tags are signed — this writes the text itself, with no such trap.
+ */
+const notesFile = requestedNotesFile ?? config.notesFile
+if (notesFile) {
+  step(`Write release notes to ${notesFile}`)
+  if (dryRun) console.log(`  ${yellow('would write')} ${notesFile}`)
+  else writeFileSync(notesFile, `${notes ?? `${projectName} ${tag}`}\n`)
 }
 
 if (runs('tag') && !taggedCommit) {

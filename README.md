@@ -55,6 +55,7 @@ Released v2.5.0
 | [📦 Install](#-install)                                                 | package, `npx`, or vendored file        |
 | [⚡ Usage](#-usage)                                                     | targets, bumps, flags                   |
 | [🧩 Steps](#-steps)                                                     | the seven steps and how to select them  |
+| [📚 Libraries versus apps](#-libraries-versus-apps)                     | which steps you want, and why           |
 | [🤖 Assistant](#-assistant-optional)                                    | optional AI drafting                    |
 | [🌍 Any language](#-any-language)                                       | Rust, Python, tag-only, anything        |
 | [✅ Preflight](#-preflight)                                             | what is checked before anything mutates |
@@ -527,6 +528,80 @@ just made. Merge, release, `WIP` and `fixup!`/`squash!` commits are excluded fro
 One row in `ASSISTANTS` in `release.mjs`: the command, the args that make it read a prompt on
 stdin, and how it spells model and effort. Tools whose stdout carries session scaffolding
 declare `outputFile` and the answer is read from there instead.
+
+## 📚 Libraries versus apps
+
+Publishing splits in two, and which one you are decides the `steps` you want.
+
+**A library, package or tool publishes its source.** The registry receives what is already
+in the repository — `npm publish`, `cargo publish`, `uv publish` — and there is nothing to
+build first. release-kit does the whole thing:
+
+```json
+{}
+```
+
+Defaults are already correct: version → changelog → tag → push → publish → release.
+
+**An app has to be built before anything can be published.** Binaries, installers, bundles,
+container images: the artifact does not exist until something makes it. That build belongs
+to a build tool, and it changes where release-kit stops.
+
+### Apps with a simple build
+
+If the build runs before the release and leaves files on disk, release-kit can attach them
+itself. Nothing else is needed:
+
+```json
+{ "assets": ["dist/app-macos.zip", "dist/app-linux.tar.gz"], "publish": null }
+```
+
+Preflight fails if a listed asset is missing, so a release cannot quietly ship without its
+binaries.
+
+### Apps with a real build pipeline
+
+goreleaser, cargo-dist and electron-builder build for many targets and create the GitHub
+release themselves, with the artifacts attached. That is their job. release-kit's work ends
+at the pushed tag:
+
+```json
+{ "steps": ["version", "changelog", "tag", "push"], "notesFile": "dist-notes.md" }
+```
+
+Nothing after `push` — no `publish`, no `release`. The tag push is the handoff, and it is
+what triggers the build workflow:
+
+```yaml
+on:
+  push:
+    tags: ['v*']
+
+jobs:
+  build:
+    steps:
+      - uses: actions/checkout@v5
+        with: { fetch-depth: 0 }
+      - run: goreleaser release --clean --release-notes dist-notes.md
+```
+
+**Do not leave `release` in `steps` here.** goreleaser creates the GitHub release itself; if
+release-kit has already created one for that tag, goreleaser fails. Exactly one of them
+should own it, and it should be the one attaching the binaries.
+
+`notesFile` exists for this handoff: goreleaser's `--release-notes` takes a file and skips
+its own changelog generation. The notes are also in the annotated tag, but reading them back
+with `git tag --format='%(contents)'` embeds the signature when tags are signed, which then
+appears in your published release notes. `notesFile` writes the text itself.
+
+### Both at once
+
+A project can be both — a Rust crate that also ships binaries, say. Publish the library from
+release-kit and let the build tool handle the binaries and the release:
+
+```json
+{ "publish": "cargo publish", "steps": ["version", "changelog", "tag", "push", "publish"] }
+```
 
 ## 🔄 Keeping vendored copies in sync
 

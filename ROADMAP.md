@@ -103,19 +103,14 @@ people actually use beats adding the long tail.
 
 ### Tools that build and publish for you
 
-goreleaser, cargo-dist, electron-builder and similar do their own building _and_ create
-their own GitHub release — which overlaps with the `release` step directly. Verified:
-`goreleaser release` has `--draft`, `--release-footer` and full release-creation flags.
+Resolved as a documented handoff rather than a feature — see "Libraries versus apps"
+in the README. release-kit stops at the pushed tag; goreleaser, cargo-dist and similar own
+building and the GitHub release. `notesFile` was added so they can consume the notes without
+the `%(contents)` signature trap.
 
-The integration is a division of labour rather than new code: release-kit owns `version`,
-`changelog`, `tag` and `push`; the build tool owns the artifacts and the release.
-
-```json
-{ "publish": "goreleaser release --clean", "steps": ["version", "changelog", "tag", "push", "publish"] }
-```
-
-Dropping `release` from `steps` is what makes this work — otherwise both create a release
-and the second one fails. This needs a documented recipe and a test, not a feature.
+What remains: a worked, tested example per tool. Only the goreleaser shape has been reasoned
+through against its actual flags; cargo-dist and electron-builder are assumed to be similar
+and have not been checked.
 
 ### Attaching artifacts built by other Actions
 
