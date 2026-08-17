@@ -6,6 +6,14 @@ All notable changes to @entro314labs/release-kit.
 
 ### Added
 
+- **Works in any language, not just Node.** `versionFile` points at wherever a project keeps
+  its version; the format is inferred from the file name (`.json`, `.toml`, or a plain file
+  holding just the version), with a `pattern` escape hatch for anything else. `versionFiles`
+  accepts the same entries, so several files stay in sync across formats. `"versionFile":
+null` suits repositories versioned by git tag alone, where the version is passed
+  explicitly. Only `publish` was ever Node-specific, and it has always been a configurable
+  command.
+
 - **Optional AI assistant**, off by default, for two jobs: writing the Conventional Commits
   message for a dirty working tree (`--commit`) and drafting release notes from the commit
   log when the changelog has no section for the version. Drafted notes are written into the

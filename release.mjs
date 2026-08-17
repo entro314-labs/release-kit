@@ -51,7 +51,10 @@ import { createInterface } from 'node:readline/promises'
  *   branch          string   the only branch a release may run from; null to allow any
  *   remote          string   git remote to push to
  *   changelog       string   changelog path; null to disable changelog handling
- *   versionFiles    string[] extra JSON files whose top-level "version" is kept in sync
+ *   versionFile     string|object|null  where the project's version lives; null when the
+ *                            repository versions by git tag alone
+ *   versionFiles    array    further files whose version is kept in sync; each is a path
+ *                            or { path, pattern }
  *   publish         string   publish command; null to skip publishing entirely
  *   commitMessage   string   release commit subject
  *   releaseTitle    string   GitHub release title
@@ -88,6 +91,7 @@ const DEFAULTS = {
   branch: 'main',
   remote: 'origin',
   changelog: 'CHANGELOG.md',
+  versionFile: 'package.json',
   versionFiles: [],
   publish: 'npm publish --tag %d',
   commitMessage: 'chore(release): %t',
@@ -645,18 +649,84 @@ function insertChangelogSection(text, version, date, body) {
 const readJson = (path) => JSON.parse(readFileSync(path, 'utf8'))
 
 /**
- * Write a top-level "version" into a JSON file without reformatting the rest of it: the
- * value is replaced in place, so key order, indentation and trailing newline all survive.
+ * Where a project keeps its version. The format is inferred from the file name, so the
+ * common cases need nothing but a path:
+ *
+ *   *.json          the JSON `"version": "x.y.z"` field
+ *   *.toml          the first `version = "x.y.z"` line — the `[package]` / `[project]`
+ *                   table comes first in Cargo.toml and pyproject.toml
+ *   anything else   the whole file is the version (a plain VERSION file)
+ *
+ * An explicit `pattern` overrides inference for formats not listed. Whatever the source,
+ * it must capture the version in exactly one group, which is what gets replaced on write.
+ */
+const VERSION_PATTERNS = {
+  json: /^\s*"version"\s*:\s*"([^"]*)"/m,
+  toml: /^version\s*=\s*"([^"]*)"/m,
+}
+
+/** The project name in the same files, used for display and the registry lookup. */
+const NAME_PATTERNS = {
+  json: /^\s*"name"\s*:\s*"([^"]*)"/m,
+  toml: /^name\s*=\s*"([^"]*)"/m,
+}
+
+/** @returns {string | null} the project name recorded beside the version */
+function readNameFrom(entry) {
+  const source = versionSource(entry)
+  const kind = source.path.endsWith('.json')
+    ? 'json'
+    : source.path.endsWith('.toml')
+      ? 'toml'
+      : null
+  if (!kind || !existsSync(source.path)) return null
+  return NAME_PATTERNS[kind].exec(readFileSync(source.path, 'utf8'))?.[1] ?? null
+}
+
+/** Normalise a versionFile / versionFiles entry to { path, pattern }. */
+const versionSource = (entry) => (typeof entry === 'string' ? { path: entry } : entry)
+
+/** The regex for a source, or null when the whole file is the version. */
+function patternFor({ path, pattern }) {
+  if (pattern) return new RegExp(pattern, 'm')
+  if (path.endsWith('.json')) return VERSION_PATTERNS.json
+  if (path.endsWith('.toml')) return VERSION_PATTERNS.toml
+  return null
+}
+
+/** @returns {string | null} the version recorded in a source file */
+function readVersionFrom(entry) {
+  const source = versionSource(entry)
+  const text = readFileSync(source.path, 'utf8')
+  const pattern = patternFor(source)
+  if (!pattern) return text.trim() || null
+  const match = pattern.exec(text)
+  return match ? match[1] : null
+}
+
+/**
+ * Replace the version in a source file, touching nothing else: only the captured range is
+ * rewritten, so formatting, key order and comments all survive.
  *
  * @returns {boolean} whether the file needed changing
  */
-function writeVersionInto(path, version) {
-  const text = readFileSync(path, 'utf8')
-  const field = /^(\s*"version"\s*:\s*)"[^"]*"/m
-  if (!field.test(text)) throw new Error(`${path} has no top-level "version" field`)
-  const updated = text.replace(field, `$1"${version}"`)
+function writeVersionInto(entry, version) {
+  const source = versionSource(entry)
+  const text = readFileSync(source.path, 'utf8')
+  const pattern = patternFor(source)
+
+  let updated
+  if (pattern) {
+    const match = pattern.exec(text)
+    if (!match) throw new Error(`${source.path} has no version matching ${pattern}`)
+    const start = match.index + match[0].indexOf(match[1])
+    updated = text.slice(0, start) + version + text.slice(start + match[1].length)
+  } else {
+    updated = `${version}\n`
+  }
+
   if (updated === text) return false
-  if (!dryRun) writeFileSync(path, updated)
+  if (!dryRun) writeFileSync(source.path, updated)
   return true
 }
 
@@ -771,11 +841,6 @@ if (existsSync(localManifest) && localManifest !== rootManifest) {
 }
 process.chdir(root)
 
-if (!existsSync('package.json')) abort(`no package.json at ${root}`)
-const pkg = readJson('package.json')
-if (!pkg.version) abort('package.json has no "version" field')
-if (!parseVersion(pkg.version)) abort(`package.json version "${pkg.version}" is not semver`)
-
 const config = {
   ...DEFAULTS,
   ...(existsSync('release.config.json') ? readJson('release.config.json') : {}),
@@ -792,6 +857,31 @@ const parseStepList = (value) =>
     .split(',')
     .map((name) => name.trim())
     .filter(Boolean)
+
+/**
+ * The project's current version and name. Both normally come from package.json, but the
+ * only Node-specific thing about a release is publishing: `versionFile` points at whatever
+ * file this project keeps its version in, and `null` means the repository versions by git
+ * tag alone and the version has to be passed explicitly.
+ */
+const manifest = existsSync('package.json') ? readJson('package.json') : null
+const versionFile = config.versionFile ? versionSource(config.versionFile) : null
+
+if (versionFile && !existsSync(versionFile.path)) {
+  abort(`versionFile ${versionFile.path} does not exist`)
+}
+
+const currentVersion = versionFile ? readVersionFrom(versionFile) : null
+if (versionFile && !currentVersion) {
+  abort(`could not read a version from ${versionFile.path}`)
+}
+if (currentVersion && !parseVersion(currentVersion)) {
+  abort(`${versionFile.path} version "${currentVersion}" is not semver`)
+}
+
+/** Used for display, the registry lookup, and the %n token. */
+const projectName =
+  manifest?.name ?? (versionFile ? readNameFrom(versionFile) : null) ?? basename(root)
 
 // Validate every name that was asked for, not just the ones that survive: a typo in
 // --skip would otherwise delete nothing and silently run the step you meant to drop.
@@ -850,20 +940,30 @@ const assistant = assistantName ? ASSISTANTS[assistantName] : null
 // ─────────────────────────────────────────────────────────────────────────────
 
 console.log(
-  bold(`${pkg.name} release`) + (dryRun ? `  ${yellow('(dry run — nothing will execute)')}` : ''),
+  bold(`${projectName} release`) +
+    (dryRun ? `  ${yellow('(dry run — nothing will execute)')}` : ''),
 )
 
 let version
 if (!target) {
-  ;({ version } = pkg)
+  if (!currentVersion) {
+    abort(
+      'this repository has no versionFile, so there is no version to default to.\n' +
+        '  Pass one explicitly: release-kit 1.2.3',
+    )
+  }
+  version = currentVersion
 } else if (BUMPS.has(target)) {
-  const preid = requestedPreid ?? preidOf(pkg.version)
+  if (!currentVersion) {
+    abort(`a ${target} bump needs a versionFile to bump from. Pass a version explicitly instead.`)
+  }
+  const preid = requestedPreid ?? preidOf(currentVersion)
   if (target.startsWith('pre') && !preid) {
     abort(
       `a ${target} bump from a stable version needs --preid <${[...KNOWN_CHANNELS].sort().join('|')}>`,
     )
   }
-  version = incrementVersion(pkg.version, target, preid)
+  version = incrementVersion(currentVersion, target, preid)
 } else if (parseVersion(target)) {
   version = target
 } else {
@@ -872,7 +972,7 @@ if (!target) {
 
 const tag = `${config.tagPrefix}${version}`
 const isPrerelease = parseVersion(version).pre.length > 0
-const bumping = version !== pkg.version && runs('version')
+const bumping = !!versionFile && version !== currentVersion && runs('version')
 
 let distTag
 try {
@@ -885,7 +985,7 @@ const expandWith = (template, transform) =>
   template
     .replaceAll('%v', transform(version))
     .replaceAll('%t', transform(tag))
-    .replaceAll('%n', transform(pkg.name))
+    .replaceAll('%n', transform(projectName))
     .replaceAll('%d', transform(distTag))
 
 /** Expand tokens for a message or title, which never reaches a shell. */
@@ -923,7 +1023,9 @@ const isTrustedPublishing =
     !!process.env.ACTIONS_ID_TOKEN_REQUEST_TOKEN) ||
   !!process.env.NPM_ID_TOKEN
 
-console.log(`  ${dim(`${pkg.version} → ${version}   tag ${tag}   dist-tag ${distTag}`)}`)
+console.log(
+  `  ${dim(`${currentVersion ?? '(no version file)'} → ${version}   tag ${tag}   dist-tag ${distTag}`)}`,
+)
 console.log(`  ${dim(`steps: ${STEPS.filter(runs).join(' → ')}`)}`)
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -938,12 +1040,14 @@ const fail = (message) => {
   problems.push(message)
 }
 
-if (bumping && compareVersions(version, pkg.version) <= 0) {
-  fail(`${version} is not greater than the current version ${pkg.version}`)
+if (bumping && compareVersions(version, currentVersion) <= 0) {
+  fail(`${version} is not greater than the current version ${currentVersion}`)
 } else if (bumping) {
-  ok(`version ${pkg.version} → ${version}`)
+  ok(`version ${currentVersion} → ${version}`)
+} else if (versionFile) {
+  ok(`releasing the version already in ${versionFile.path} (${version})`)
 } else {
-  ok(`releasing the version already in package.json (${version})`)
+  ok(`releasing ${version} (no version file; the tag is the version)`)
 }
 
 const dirty = tryRead('git', ['status', '--porcelain'])
@@ -1030,7 +1134,7 @@ if (!runs('release')) {
 let alreadyPublished = false
 if (!publishCommand) {
   note(runs('publish') ? 'no publish command configured' : 'publish step not selected')
-} else if (pkg.private) {
+} else if (manifest?.private) {
   fail('package.json is private but a publish command is configured')
 } else if (!registryCli) {
   ok(`publish: ${publishCommand}`)
@@ -1048,9 +1152,9 @@ if (!publishCommand) {
       )
     } else ok(`${registryCli} authenticated (${user || 'unknown user'})`)
   }
-  alreadyPublished = succeeds(registryCli, ['view', `${pkg.name}@${version}`, 'version'])
+  alreadyPublished = succeeds(registryCli, ['view', `${projectName}@${version}`, 'version'])
   if (alreadyPublished) {
-    note(`${pkg.name}@${version} is already on the registry — will skip publishing`)
+    note(`${projectName}@${version} is already on the registry — will skip publishing`)
   }
 }
 
@@ -1128,7 +1232,7 @@ if (!assumeYes && !dryRun && process.stdin.isTTY) {
   const rl = createInterface({ input: process.stdin, output: process.stdout })
   let answer = ''
   try {
-    answer = await rl.question(`\nRelease ${bold(tag)} of ${pkg.name}? [y/N] `)
+    answer = await rl.question(`\nRelease ${bold(tag)} of ${projectName}? [y/N] `)
   } catch {
     // Ctrl+C or Ctrl+D at the prompt rejects the question. That is a decline, not a
     // crash — without this it exits on an unhandled AbortError and a stack trace.
@@ -1168,11 +1272,12 @@ if (dirty && runs('commit')) {
 
 if (bumping) {
   step(`Write version ${version}`)
-  for (const file of ['package.json', ...config.versionFiles]) {
-    if (!existsSync(file)) abort(`versionFiles entry ${file} does not exist`)
-    if (writeVersionInto(file, version)) {
-      staged.push(file)
-      console.log(`  ${dryRun ? yellow('would write') : dim('wrote')} ${file}`)
+  for (const entry of [versionFile, ...config.versionFiles]) {
+    const source = versionSource(entry)
+    if (!existsSync(source.path)) abort(`versionFiles entry ${source.path} does not exist`)
+    if (writeVersionInto(source, version)) {
+      staged.push(source.path)
+      console.log(`  ${dryRun ? yellow('would write') : dim('wrote')} ${source.path}`)
     }
   }
   // A package-lock.json embeds the root version twice, so it goes stale on a bump.
@@ -1222,7 +1327,7 @@ if (runs('tag') && !taggedCommit) {
     tag,
     '--cleanup=verbatim',
     '-m',
-    `${notes ?? `${pkg.name} ${tag}`}\n`,
+    `${notes ?? `${projectName} ${tag}`}\n`,
   ])
 }
 

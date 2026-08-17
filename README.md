@@ -56,6 +56,7 @@ Released v2.5.0
 | [⚡ Usage](#-usage)                                                     | targets, bumps, flags                   |
 | [🧩 Steps](#-steps)                                                     | the seven steps and how to select them  |
 | [🤖 Assistant](#-assistant-optional)                                    | optional AI drafting                    |
+| [🌍 Any language](#-any-language)                                       | Rust, Python, tag-only, anything        |
 | [✅ Preflight](#-preflight)                                             | what is checked before anything mutates |
 | [♻️ Recovering from a failed run](#️-recovering-from-a-failed-run)       | why re-running is safe                  |
 | [⚙️ Configuration](#️-configuration)                                     | `release.config.json`, publishing, auth |
@@ -248,6 +249,39 @@ it stopped. There is no cleanup step, no `--resume`, and nothing to remember.
 
 The one case that is not recoverable by re-running is a tag that exists at a _different_
 commit than `HEAD`. That is a genuine conflict, and it aborts rather than guessing.
+
+## 🌍 Any language
+
+Only one step is Node-specific: `publish`. Committing, changelog rolling, tagging, pushing
+and GitHub releases are the same everywhere, so `versionFile` points at wherever a project
+keeps its version and the rest works unchanged.
+
+| Project                        | Config                                                       |
+| ------------------------------ | ------------------------------------------------------------ |
+| Node                           | nothing — `package.json` is the default                      |
+| Rust                           | `{"versionFile": "Cargo.toml", "publish": "cargo publish"}`  |
+| Python                         | `{"versionFile": "pyproject.toml", "publish": "uv publish"}` |
+| Anything with a `VERSION` file | `{"versionFile": "VERSION", "publish": null}`                |
+| Versioned only by tag          | `{"versionFile": null}`, then `release-kit 1.2.3`            |
+
+The format is inferred from the file name: `.json` reads the `"version"` field, `.toml`
+reads the first `version = "x.y.z"` line, and any other file is treated as containing just
+the version. Only the version itself is rewritten, so comments and formatting survive — and
+because the TOML match is anchored to the start of a line, a dependency's
+`serde = { version = "1.0" }` is left alone.
+
+For anything else, give a pattern with one capture group around the version. `versionFiles`
+takes the same entries, so several files stay in sync across formats:
+
+```json
+{
+  "versionFile": { "path": "version.go", "pattern": "^const Version = \"(.+)\"" },
+  "versionFiles": [{ "path": "Chart.yaml", "pattern": "^version: (.+)$" }]
+}
+```
+
+The project name comes from the manifest when there is one (`name` in `package.json`,
+`Cargo.toml` or `pyproject.toml`), and falls back to the repository directory.
 
 ## ⚙️ Configuration
 
