@@ -61,7 +61,29 @@ import { createInterface } from 'node:readline/promises'
  *                            object form { tool, model, effort } also pins which model and
  *                            reasoning effort that CLI is invoked with.
  */
+/**
+ * The release pipeline, in the only order that is safe to run it. `steps` selects which of
+ * these execute; it never reorders them — publishing before tagging, or pushing before
+ * committing, is a mistake the tool should not let you express.
+ *
+ *   commit     commit a dirty working tree (opt-in; touches work that predates the release)
+ *   version    write the version into package.json and versionFiles
+ *   changelog  roll [Unreleased] into the version, or add drafted notes
+ *   tag        annotated git tag carrying the release notes
+ *   push       push the branch and the tag together
+ *   publish    run the configured publish command
+ *   release    create the GitHub release
+ *
+ * `version` and `changelog` write files; those writes are persisted by a release commit
+ * made automatically when either step runs.
+ */
+const STEPS = ['commit', 'version', 'changelog', 'tag', 'push', 'publish', 'release']
+
+/** Everything but `commit`, which is opt-in because it commits work you did not stage. */
+const DEFAULT_STEPS = STEPS.filter((name) => name !== 'commit')
+
 const DEFAULTS = {
+  steps: DEFAULT_STEPS,
   tagPrefix: 'v',
   branch: 'main',
   remote: 'origin',
@@ -100,18 +122,23 @@ Target (optional; defaults to the version already in package.json):
   prepatch preminor premajor prerelease
                        prerelease bump; needs --preid unless it can be inferred
 
+Steps, in the fixed order they run. All but "commit" run by default:
+  ${STEPS.join('  ')}
+
 Flags:
+  --only <steps>       run only these steps, comma-separated
+  --skip <steps>       run every step except these
+  --commit             add the opt-in commit step: commit a dirty working tree with a
+                       drafted Conventional Commits message instead of refusing to release
   --preid <id>         prerelease identifier (alpha, beta, rc, next, nightly, canary)
-  --tag <dist-tag>     override the npm dist-tag (default: derived from the version)
+  --dist-tag <name>    override the npm dist-tag (default: derived from the version)
   --dry-run            print every step and execute nothing
   --yes, -y            skip the confirmation prompt
-  --skip-publish       do not publish to the registry
-  --skip-release       do not create the GitHub release
-  --commit             commit a dirty working tree with a drafted Conventional Commits
-                       message instead of refusing to release
   --assistant <name>   drafting CLI to use: auto, none, claude, codex
-  --model <name>       model for the assistant (e.g. sonnet, opus)
-  --effort <level>     reasoning effort for the assistant (low … max)
+  --assistant-model <name>
+                       model the assistant runs with (e.g. sonnet, opus)
+  --assistant-effort <level>
+                       reasoning effort the assistant runs with (low … max)
   --sync <dir>...      copy this script into other projects' scripts/ and exit
   --help, -h           show this
 
@@ -648,14 +675,14 @@ const option = (name) => {
 
 const dryRun = flag('--dry-run')
 const assumeYes = flag('--yes') || flag('-y')
-const skipPublish = flag('--skip-publish')
-const skipRelease = flag('--skip-release')
-const explicitDistTag = option('--tag')
+const onlySteps = option('--only')
+const skippedSteps = option('--skip')
+const explicitDistTag = option('--dist-tag')
 const requestedPreid = option('--preid')
 const autoCommit = flag('--commit')
 const requestedAssistant = option('--assistant')
-const requestedModel = option('--model')
-const requestedEffort = option('--effort')
+const requestedModel = option('--assistant-model')
+const requestedEffort = option('--assistant-effort')
 
 if (flag('--help') || flag('-h')) {
   console.log(USAGE)
@@ -695,7 +722,31 @@ if (flag('--sync')) {
   process.exit(0)
 }
 
-const target = argv.find((a) => !a.startsWith('-') && a !== explicitDistTag && a !== requestedPreid)
+/**
+ * Options that consume the argument after them. Without this list a positional target is
+ * found by guessing, and `--only tag,push` gets read as the version to release.
+ */
+const VALUE_OPTIONS = new Set([
+  '--only',
+  '--skip',
+  '--preid',
+  '--dist-tag',
+  '--assistant',
+  '--assistant-model',
+  '--assistant-effort',
+])
+
+/** The version or bump target: the first argument that is neither a flag nor a flag's value. */
+const target = (() => {
+  for (let i = 0; i < argv.length; i += 1) {
+    if (VALUE_OPTIONS.has(argv[i])) {
+      i += 1
+      continue
+    }
+    if (!argv[i].startsWith('-')) return argv[i]
+  }
+  return undefined
+})()
 
 // ─────────────────────────────────────────────────────────────────────────────
 // SETUP
@@ -731,6 +782,33 @@ const config = {
 }
 const unknownKeys = Object.keys(config).filter((key) => !(key in DEFAULTS))
 if (unknownKeys.length) abort(`release.config.json has unknown keys: ${unknownKeys.join(', ')}`)
+
+/**
+ * Which steps run: config provides the baseline, --only replaces it, --skip subtracts, and
+ * --commit adds the opt-in step. Unknown names are an error rather than a silent no-op.
+ */
+const parseStepList = (value) =>
+  value
+    .split(',')
+    .map((name) => name.trim())
+    .filter(Boolean)
+
+// Validate every name that was asked for, not just the ones that survive: a typo in
+// --skip would otherwise delete nothing and silently run the step you meant to drop.
+const requestedStepNames = [
+  ...(onlySteps ? parseStepList(onlySteps) : []),
+  ...(skippedSteps ? parseStepList(skippedSteps) : []),
+  ...(Array.isArray(config.steps) ? config.steps : []),
+]
+const unknownSteps = [...new Set(requestedStepNames)].filter((name) => !STEPS.includes(name))
+if (unknownSteps.length) {
+  abort(`unknown step(s): ${unknownSteps.join(', ')}\n  Known steps: ${STEPS.join(', ')}`)
+}
+
+const steps = new Set(onlySteps ? parseStepList(onlySteps) : (config.steps ?? DEFAULT_STEPS))
+if (skippedSteps) for (const name of parseStepList(skippedSteps)) steps.delete(name)
+if (autoCommit) steps.add('commit')
+const runs = (name) => steps.has(name)
 
 /**
  * The drafting tool, resolved from --assistant then config. "auto" picks the first one
@@ -794,7 +872,7 @@ if (!target) {
 
 const tag = `${config.tagPrefix}${version}`
 const isPrerelease = parseVersion(version).pre.length > 0
-const bumping = version !== pkg.version
+const bumping = version !== pkg.version && runs('version')
 
 let distTag
 try {
@@ -821,7 +899,7 @@ const expand = (template) => expandWith(template, (value) => value)
 const shellQuote = (value) => `'${value.replaceAll("'", `'\\''`)}'`
 const expandShell = (template) => expandWith(template, shellQuote)
 
-const publishCommand = config.publish && !skipPublish ? expandShell(config.publish) : null
+const publishCommand = runs('publish') && config.publish ? expandShell(config.publish) : null
 
 /**
  * npm and pnpm answer `whoami` and `view` identically and share `~/.npmrc`, so whichever
@@ -846,6 +924,7 @@ const isTrustedPublishing =
   !!process.env.NPM_ID_TOKEN
 
 console.log(`  ${dim(`${pkg.version} → ${version}   tag ${tag}   dist-tag ${distTag}`)}`)
+console.log(`  ${dim(`steps: ${STEPS.filter(runs).join(' → ')}`)}`)
 
 // ─────────────────────────────────────────────────────────────────────────────
 // PREFLIGHT — every check runs, then it aborts once with all of the failures
@@ -869,16 +948,16 @@ if (bumping && compareVersions(version, pkg.version) <= 0) {
 
 const dirty = tryRead('git', ['status', '--porcelain'])
 if (dirty === null) fail('could not read git status')
-else if (dirty && autoCommit) {
+else if (dirty && runs('commit')) {
   ok(`working tree has ${dirty.split('\n').length} change(s) — will be committed first`)
   console.log(dim(indent(formatStatus(dirty))))
 } else if (dirty) {
   fail(`working tree is not clean:\n${indent(formatStatus(dirty))}`)
 } else ok('working tree clean')
 
-if (autoCommit && !assistant) {
+if (runs('commit') && !assistant) {
   fail(
-    '--commit needs a drafting assistant to write the message. Configure one with ' +
+    'the commit step needs a drafting assistant to write the message. Configure one with ' +
       '`--assistant auto`, or set "assistant" in release.config.json.',
   )
 } else if (assistant) {
@@ -923,7 +1002,9 @@ if (!succeeds('git', ['remote', 'get-url', config.remote])) {
 
 const head = tryRead('git', ['rev-parse', 'HEAD'])
 const taggedCommit = tryRead('git', ['rev-list', '-n', '1', tag])
-if (taggedCommit && bumping) {
+if (!runs('tag')) {
+  note('tag step not selected')
+} else if (taggedCommit && bumping) {
   fail(`tag ${tag} already exists — release a different version`)
 } else if (taggedCommit && taggedCommit !== head) {
   fail(`tag ${tag} already exists at ${taggedCommit.slice(0, 8)}, not at HEAD`)
@@ -934,8 +1015,8 @@ if (taggedCommit && bumping) {
 }
 
 let releaseExists = false
-if (skipRelease) {
-  note('GitHub release skipped (--skip-release)')
+if (!runs('release')) {
+  note('release step not selected')
 } else if (!succeeds('gh', ['--version'])) {
   fail('the GitHub CLI (`gh`) is not installed — https://cli.github.com')
 } else if (!succeeds('gh', ['auth', 'status'])) {
@@ -948,7 +1029,7 @@ if (skipRelease) {
 
 let alreadyPublished = false
 if (!publishCommand) {
-  note(skipPublish ? 'publish skipped (--skip-publish)' : 'publish disabled in config')
+  note(runs('publish') ? 'no publish command configured' : 'publish step not selected')
 } else if (pkg.private) {
   fail('package.json is private but a publish command is configured')
 } else if (!registryCli) {
@@ -982,7 +1063,7 @@ let draftedNotes = null
  * True when --commit still has to create a commit. Notes drafted before that commit would
  * describe an incomplete release, so drafting waits until the working tree is committed.
  */
-const notesDeferred = !!(dirty && autoCommit && assistant)
+const notesDeferred = !!(dirty && runs('commit') && assistant)
 
 /** Draft notes from the commit log, reporting what it is doing since it takes a moment. */
 function draftNotesFor(v) {
@@ -1063,7 +1144,7 @@ if (!assumeYes && !dryRun && process.stdin.isTTY) {
 
 const staged = []
 
-if (dirty && autoCommit) {
+if (dirty && runs('commit')) {
   step('Commit the working tree')
   mutate('git', ['add', '--all'])
   // Draft after staging: the message describes what is staged, not what happens to be
@@ -1101,12 +1182,12 @@ if (bumping) {
   }
 }
 
-if (rolledChangelog) {
+if (rolledChangelog && runs('changelog')) {
   step(`Roll ${config.changelog} to ${version}`)
   if (dryRun) console.log(`  ${yellow('would write')} ${config.changelog}`)
   else writeFileSync(config.changelog, rolledChangelog)
   staged.push(config.changelog)
-} else if (draftedNotes && config.changelog && existsSync(config.changelog)) {
+} else if (runs('changelog') && draftedNotes && config.changelog && existsSync(config.changelog)) {
   step(`Add the drafted ${version} section to ${config.changelog}`)
   if (dryRun) console.log(`  ${yellow('would write')} ${config.changelog}`)
   else {
@@ -1129,7 +1210,7 @@ if (staged.length) {
   mutate('git', ['commit', '-m', expand(config.commitMessage)])
 }
 
-if (!taggedCommit) {
+if (runs('tag') && !taggedCommit) {
   step(`Annotated tag ${tag}`)
   // The notes become the tag annotation too, so a CI release workflow can read them
   // straight off the tag instead of re-deriving them. --cleanup=verbatim is required:
@@ -1145,17 +1226,19 @@ if (!taggedCommit) {
   ])
 }
 
-step(`Push branch and tag to ${config.remote}`)
-// --follow-tags sends the commit and the tag in one call; pushing them separately is how
-// a tag ends up on the remote without its commit, or a release without its tag.
-mutate('git', ['push', '--follow-tags', config.remote, branch ?? 'HEAD'])
+if (runs('push')) {
+  step(`Push branch and tag to ${config.remote}`)
+  // --follow-tags sends the commit and the tag in one call; pushing them separately is how
+  // a tag ends up on the remote without its commit, or a release without its tag.
+  mutate('git', ['push', '--follow-tags', config.remote, branch ?? 'HEAD'])
+}
 
 if (publishCommand && !alreadyPublished) {
   step(`Publish to the registry (dist-tag ${distTag})`)
   mutateShell(publishCommand)
 }
 
-if (!skipRelease && !releaseExists) {
+if (runs('release') && !releaseExists) {
   step(`GitHub release ${tag}`)
   const args = [
     'release',

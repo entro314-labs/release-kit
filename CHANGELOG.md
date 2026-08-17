@@ -2,7 +2,7 @@
 
 All notable changes to @entro314labs/release-kit.
 
-## [Unreleased]
+## [2.0.0] - 2026-08-17
 
 ### Added
 
@@ -22,6 +22,39 @@ All notable changes to @entro314labs/release-kit.
 - Every assistant failure — missing, unauthenticated, timed out, unusable answer — falls
   back to the previous behaviour. Naming a tool that is not installed is a loud error;
   `"auto"` degrades quietly.
+
+### Changed
+
+- **Steps are now one uniform concept.** The pipeline is seven named steps — `commit`,
+  `version`, `changelog`, `tag`, `push`, `publish`, `release` — selected with `--only` and
+  `--skip`, or a `steps` array in `release.config.json`. Previously four of the seven were
+  reachable, each by a different mechanism: a negative flag, a config null, or a positive
+  flag. `version`, `tag` and `push` could not be turned off at all.
+- **`steps` decides what runs; every other key describes how a step behaves.** `"publish":
+null` now means "no publish command configured" rather than "skip publishing", and the
+  step no-ops with a note. Use `--skip publish` or omit it from `steps` to skip it.
+- The order of steps is fixed. `steps` is a set, not a sequence: publishing before tagging
+  or pushing before committing is not expressible.
+
+### Removed
+
+- **`--skip-publish` and `--skip-release`** — use `--skip publish,release`.
+
+### Renamed
+
+- **`--tag` is now `--dist-tag`.** It sets the npm dist-tag, and collided with `tagPrefix`
+  and the git tag that most people mean by "tag".
+- **`--model` and `--effort` are now `--assistant-model` and `--assistant-effort`**, since
+  they configure the drafting assistant rather than anything about the release.
+
+### Fixed
+
+- **A flag's value could be mistaken for the release target.** Arguments were scanned for
+  the first bare word, excluding known option values by identity, so `--only tag,push`
+  was read as a version to release. Options that take a value are now declared, and the
+  argument after them is never treated as the target.
+- **A misspelled step name was silently ignored.** `--skip pubish` deleted nothing and
+  published anyway. Requested step names are now validated before they are applied.
 
 ## [1.0.3] - 2026-08-17
 

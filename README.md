@@ -54,7 +54,8 @@ Released v2.5.0
 | ----------------------------------------------------------------------- | --------------------------------------- |
 | [📦 Install](#-install)                                                 | package, `npx`, or vendored file        |
 | [⚡ Usage](#-usage)                                                     | targets, bumps, flags                   |
-| [🔁 What a release does](#-what-a-release-does)                         | the seven steps, notes, dist-tags       |
+| [🧩 Steps](#-steps)                                                     | the seven steps and how to select them  |
+| [🤖 Assistant](#-assistant-optional)                                    | optional AI drafting                    |
 | [✅ Preflight](#-preflight)                                             | what is checked before anything mutates |
 | [♻️ Recovering from a failed run](#️-recovering-from-a-failed-run)       | why re-running is safe                  |
 | [⚙️ Configuration](#️-configuration)                                     | `release.config.json`, publishing, auth |
@@ -136,35 +137,50 @@ Prerelease bumps need `--preid` unless the current version already carries one t
 
 ### Flags
 
-| Flag               | Effect                                                                     |
-| ------------------ | -------------------------------------------------------------------------- |
-| `--dry-run`        | Print every step, execute nothing. Preflight still runs and still reports. |
-| `--yes`, `-y`      | Skip the confirmation prompt.                                              |
-| `--preid <id>`     | Prerelease identifier: `alpha`, `beta`, `rc`, `next`, `nightly`, `canary`. |
-| `--tag <dist-tag>` | Override the npm dist-tag. Always wins over the derived one.               |
-| `--skip-publish`   | Do not publish to the registry.                                            |
-| `--skip-release`   | Do not create the GitHub release.                                          |
-| `--sync <dir>...`  | Copy this script into other projects and exit. Touches no git state.       |
-| `--help`, `-h`     | Full flag list.                                                            |
+| Flag                | Effect                                                                     |
+| ------------------- | -------------------------------------------------------------------------- |
+| `--dry-run`         | Print every step, execute nothing. Preflight still runs and still reports. |
+| `--yes`, `-y`       | Skip the confirmation prompt.                                              |
+| `--preid <id>`      | Prerelease identifier: `alpha`, `beta`, `rc`, `next`, `nightly`, `canary`. |
+| `--dist-tag <name>` | Override the npm dist-tag. Always wins over the derived one.               |
+| `--only <steps>`    | Run only these steps, comma-separated.                                     |
+| `--skip <steps>`    | Run every step except these.                                               |
+| `--sync <dir>...`   | Copy this script into other projects and exit. Touches no git state.       |
+| `--help`, `-h`      | Full flag list.                                                            |
 
-## 🔁 What a release does
+## 🧩 Steps
 
-Steps that do not apply are skipped silently — a project with no changelog, or with
-`publish` disabled, simply has fewer steps.
+A release is seven named steps. They always run in this order — `steps` selects which of
+them execute, it never reorders them.
 
-1. **Write the version** into `package.json` and any configured `versionFiles`. The value
-   is replaced in place, so key order, indentation, and trailing newline all survive. A
-   `package-lock.json` is resynced, because it embeds the root version twice.
-2. **Roll the changelog**: `## [Unreleased]` becomes `## [x.y.z] - YYYY-MM-DD`, with a
-   fresh empty `## [Unreleased]` reopened above it for the next cycle — the
-   [Keep a Changelog](https://keepachangelog.com/) convention.
-3. **Commit** the files that actually changed.
-4. **Tag**, annotated, with the release notes as the annotation — so a CI workflow can
-   read the notes straight off the tag instead of re-deriving them.
-5. **Push** with `git push --follow-tags`, which sends the commit and the tag in one
-   call. Pushing them separately is how a tag ends up on the remote without its commit.
-6. **Publish** to the registry.
-7. **Create the GitHub release**, marked `--latest` or `--prerelease`.
+| Step        | Default | What it does                                                                                    |
+| ----------- | ------- | ----------------------------------------------------------------------------------------------- |
+| `commit`    | off     | Commit a dirty working tree with a drafted message ([assistant](#-assistant-optional) required) |
+| `version`   | on      | Write the version into `package.json` and `versionFiles`                                        |
+| `changelog` | on      | Roll `[Unreleased]` into the version, or add drafted notes                                      |
+| `tag`       | on      | Annotated git tag carrying the release notes                                                    |
+| `push`      | on      | Push the branch and tag together (`--follow-tags`)                                              |
+| `publish`   | on      | Run the configured `publish` command                                                            |
+| `release`   | on      | Create the GitHub release                                                                       |
+
+`version` and `changelog` write files; those writes are persisted by a release commit made
+automatically when either step runs.
+
+```sh
+release-kit minor --skip publish            # everything but publish
+release-kit --only tag,push,release         # a version already committed elsewhere
+release-kit minor --commit                  # add the opt-in commit step
+```
+
+Or fix it per project, and just run `release-kit minor`:
+
+```json
+{ "steps": ["commit", "version", "changelog", "tag", "push", "release"] }
+```
+
+`steps` decides **what** runs. Every other key describes **how** a step behaves — `publish`
+is the command, `changelog` is the file. A step whose configuration is `null` runs as a
+no-op and says so, rather than silently meaning "skip".
 
 ### Release notes
 
@@ -194,7 +210,7 @@ version, never guessed:
 
 The refusal is deliberate: an unrecognised prerelease identifier has no safe channel, and
 falling through to `latest` would put a prerelease on the stable line where every
-`npm install` picks it up. Pass `--tag <dist-tag>` to choose a channel explicitly.
+`npm install` picks it up. Pass `--dist-tag <name>` to choose a channel explicitly.
 
 ## ✅ Preflight
 
@@ -322,13 +338,13 @@ installed, not authenticated, timed out, unusable answer — falls back to the b
 already have. A release is never blocked because a text generator was unavailable.
 
 ```sh
-pnpm release minor --commit --assistant claude --model sonnet --effort low
+pnpm release minor --commit --assistant claude --assistant-model sonnet --assistant-effort low
 ```
 
-| Tool     | Invocation   | Model     | Effort                       |
-| -------- | ------------ | --------- | ---------------------------- |
-| `claude` | `claude -p`  | `--model` | `--effort` (low … max)       |
-| `codex`  | `codex exec` | `-m`      | `-c model_reasoning_effort=` |
+| Tool     | Invocation   | Model               | Effort                           |
+| -------- | ------------ | ------------------- | -------------------------------- |
+| `claude` | `claude -p`  | `--assistant-model` | `--assistant-effort` (low … max) |
+| `codex`  | `codex exec` | `-m`                | `-c model_reasoning_effort=`     |
 
 Configure it once instead:
 
