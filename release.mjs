@@ -480,6 +480,21 @@ const target = argv.find((a) => !a.startsWith('-') && a !== explicitDistTag && a
 
 const root = tryRead('git', ['rev-parse', '--show-toplevel'])
 if (!root) abort('not inside a git repository')
+
+// A release is scoped to the repository: the version, the tag and the push all belong to
+// one git history, so the package released is the one at the git root. Refuse when invoked
+// from a nested package instead — silently releasing the parent is the worse outcome.
+const localManifest = resolve('package.json')
+const rootManifest = join(root, 'package.json')
+if (existsSync(localManifest) && localManifest !== rootManifest) {
+  abort(
+    `${relative(root, localManifest)} is a nested package, but a release covers the whole ` +
+      `repository.\n\n  Running here would release ${
+        existsSync(rootManifest) ? readJson(rootManifest).name : 'the repository root'
+      } instead.\n` +
+      '  release-kit handles one package per repository; it does not release workspace members.',
+  )
+}
 process.chdir(root)
 
 if (!existsSync('package.json')) abort(`no package.json at ${root}`)

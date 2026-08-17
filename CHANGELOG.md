@@ -2,6 +2,17 @@
 
 All notable changes to @entro314labs/release-kit.
 
+## [1.0.3] - 2026-08-17
+
+### Fixed
+
+- **Refuse to run from a nested package.** A release covers a whole repository — the
+  version, the tag and the push all belong to one git history — so the package released is
+  the one at the git root. Invoked from a workspace member or any subdirectory carrying its
+  own `package.json`, it previously resolved to the git root and released the parent
+  package instead. It now aborts and names the package it would have released. A
+  subdirectory without its own `package.json` still resolves to the root as before.
+
 ## [1.0.1] - 2026-08-17
 
 ### Added
