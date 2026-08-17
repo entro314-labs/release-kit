@@ -4,17 +4,19 @@ All notable changes to @entro314labs/release-kit.
 
 ## [Unreleased]
 
-## [2.3.1] - 2026-08-17
+### Fixed
+
+- **A version that already has a changelog heading is never rolled again.** An empty
+  `## [Unreleased]` was promoted into an empty version section, and because an empty section
+  reads as "no section", the next release rolled it again and produced a duplicate heading.
+- **An empty `[Unreleased]` is no longer rolled at all**, so a release with nothing recorded
+  leaves no empty section behind.
+- **Reusing an existing tag while still producing a commit is refused.** Resuming a release
+  reuses the tag at `HEAD`, but if the run would also commit a version bump or changelog
+  entry, that commit moves `HEAD` past the tag and the release ends up tagged at the wrong
+  revision — silently, until someone checks out the tag.
 
 ## [2.3.1] - 2026-08-17
-
-## [2.3.0] - 2026-08-17
-
-## [2.2.2] - 2026-08-17
-
-## [2.2.1] - 2026-08-17
-
-## [2.2.0] - 2026-08-17
 
 ### Added
 
@@ -23,6 +25,16 @@ All notable changes to @entro314labs/release-kit.
   permanently "Unverified". When `gh` can list the account's signing keys they are compared;
   when it cannot — `gh` absent, token without the scope, no network — the check stays
   silent. A warning, never a failure: an unverified commit is cosmetic.
+
+### Fixed
+
+- **Two warnings still named the pre-2.0 flags.** An assistant that takes no model or effort
+  flag reported `--model`/`--effort` rather than `--assistant-model`/`--assistant-effort`.
+
+## [2.3.0] - 2026-08-17
+
+### Added
+
 - **`release-kit auto` derives the version from Conventional Commits**, following
   release-please's default strategy: breaking is major, `feat:` is minor, everything else is
   a patch, softened below `1.0.0` where a breaking change bumps the minor instead of jumping
@@ -35,11 +47,21 @@ All notable changes to @entro314labs/release-kit.
   under Features, Bug Fixes, Performance Improvements and Reverts, with breaking changes
   first and chores, CI, docs and tests hidden. This sits above the assistant and GitHub's
   generated notes, so useful notes no longer depend on having a drafting CLI installed.
+
+## [2.2.2] - 2026-08-17
+
+### Added
+
 - **The version source is detected when unconfigured.** With no `versionFile` set it looks
   for `package.json`, `pyproject.toml`, `Cargo.toml`, then `VERSION`, so a Python or Rust
   project needs no configuration to release. Previously it insisted on `package.json` and
   aborted in any repository without one. An explicit `versionFile: null` is still honoured
   and never re-detected.
+
+## [2.2.1] - 2026-08-17
+
+### Added
+
 - **GitHub Actions outputs.** A completed release writes `version`, `tag`, `name`,
   `dist-tag`, `steps`, `published` and `release-url` to `$GITHUB_OUTPUT`, so later steps can
   act on the result instead of re-deriving it. Nothing is written on a dry run, and an
@@ -47,15 +69,21 @@ All notable changes to @entro314labs/release-kit.
 - **A shallow clone is called out.** CI checkouts default to depth 1, which hides the
   history release notes are drafted from — the release was correct but the notes silently
   described a fraction of the work.
+
+### Documentation
+
+- **A detached HEAD is a preflight failure** rather than a confusing branch mismatch. Tag
+  and pull-request checkouts leave no branch to push; it previously compared the literal
+  "HEAD" against the configured branch and reported being up to date with `origin/HEAD`.
+
+## [2.2.0] - 2026-08-17
+
+### Added
+
 - **Signing is checked before anything mutates.** With `commit.gpgsign` or `tag.gpgsign`
   enabled, a key that git cannot load previously failed at the commit step — after the
   version had already been written. Preflight now verifies the key resolves, using git's own
   config resolution, and says how to disable signing for one run if it does not.
-
-### Fixed
-
-- **Two warnings still named the pre-2.0 flags.** An assistant that takes no model or effort
-  flag reported `--model`/`--effort` rather than `--assistant-model`/`--assistant-effort`.
 
 ### Documentation
 
@@ -64,10 +92,6 @@ All notable changes to @entro314labs/release-kit.
   `versionFile`, `versioning` and `assistant` were missing from the config table,
   `versionFiles` still claimed JSON-only, and `"publish": null` was still described as
   "skips publishing" rather than "no command configured".
-
-- **A detached HEAD is a preflight failure** rather than a confusing branch mismatch. Tag
-  and pull-request checkouts leave no branch to push; it previously compared the literal
-  "HEAD" against the configured branch and reported being up to date with `origin/HEAD`.
 - **`--sync` no longer crashes when the script is piped from stdin.** Copying itself needs a
   file on disk, and `import.meta.url` points at a synthetic `[eval]` path when piped, so it
   failed on a missing file with a raw stack trace. It now explains the situation.

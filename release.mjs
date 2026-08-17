@@ -756,9 +756,18 @@ function changelogSection(text, version) {
  * @returns {string | null} the updated document, or null when there is nothing to roll
  */
 function rollUnreleased(text, version, date) {
+  // A heading for this version already exists — possibly with an empty body, which
+  // `changelogSection` reports as absent. Rolling again would duplicate the heading.
+  if (new RegExp(`^##\\s+\\[?v?${escapeRe(version)}\\]?(?![\\w.-])`, 'm').test(text)) return null
+
   const heading = /^##\s+\[?Unreleased\]?[^\n]*$/im
   const match = heading.exec(text)
   if (!match) return null
+
+  // An empty [Unreleased] has nothing to promote; rolling it produces an empty section.
+  const rest = text.slice(match.index + match[0].length)
+  const body = (/^## /m.exec(rest) ? rest.slice(0, /^## /m.exec(rest).index) : rest).trim()
+  if (!body) return null
   const released = `## [Unreleased]\n\n## [${version}] - ${date}`
   return text.slice(0, match.index) + released + text.slice(match.index + match[0].length)
 }
@@ -1513,6 +1522,18 @@ if (config.changelog && existsSync(config.changelog)) {
 for (const asset of config.assets) {
   if (existsSync(asset)) ok(`asset ${asset}`)
   else fail(`asset ${asset} does not exist`)
+}
+
+// Reusing a tag is the resume path, and a resume writes nothing. If this run would still
+// produce a commit, that commit moves HEAD past the tag and the release ends up tagged at
+// the wrong revision — which is silent until someone checks out the tag.
+if (taggedCommit && runs('tag') && (bumping || rolledChangelog)) {
+  fail(
+    `tag ${tag} already exists at HEAD, but this run would still commit ` +
+      `${[bumping && 'a version bump', rolledChangelog && 'a changelog entry'].filter(Boolean).join(' and ')}.\n` +
+      '       That commit would leave the tag behind HEAD. Release a new version, or use ' +
+      '--only with the steps that remain.',
+  )
 }
 
 if (problems.length) {
