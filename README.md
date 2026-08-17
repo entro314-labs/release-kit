@@ -232,8 +232,11 @@ Notes resolve in this order:
 2. The `## [Unreleased]` section, if the version has no section of its own — this is the
    same content that step 2 above is about to promote.
 3. The commits grouped by Conventional Commit type — Features, Bug Fixes, Performance
-   Improvements, Reverts, with breaking changes first and chores, CI and docs hidden. This
-   is deterministic and needs nothing installed, so decent notes are the default rather
+   Improvements, Reverts, with breaking changes first and chores, CI and docs hidden. Each
+   bullet links to its commit, and `closes #12` / `fixes #34` in a message becomes a link to
+   the issue. A `BREAKING CHANGE:` footer is used in place of the subject, since it explains
+   the break. A commit reverted within the same release drops out along with its revert.
+   All deterministic and needing nothing installed, so decent notes are the default rather
    than something that requires an assistant.
 4. Otherwise GitHub generates them from the commits since the previous tag.
 

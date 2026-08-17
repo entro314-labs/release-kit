@@ -385,14 +385,16 @@ function commitsSinceLastTag() {
   const range = lastTag ? `${lastTag}..HEAD` : 'HEAD'
   // %B is the whole message: bodies carry BREAKING CHANGE and Release-As footers. A record
   // separator keeps multi-line messages parseable when splitting the log back apart.
-  const raw = tryRead('git', ['log', `--format=%B%x1e`, range]) ?? ''
+  // %h first, then the message: the hash is what links each bullet back to its commit.
+  const raw = tryRead('git', ['log', `--format=%h%x1f%B%x1e`, range]) ?? ''
   const commits = raw
     .split('\u001E')
     .map((entry) => entry.trim())
     .filter(Boolean)
     .map((entry) => {
-      const [subject, ...rest] = entry.split('\n')
-      return { subject: subject.trim(), body: rest.join('\n').trim() }
+      const [hash, message = ''] = entry.split('\u001F')
+      const [subject, ...rest] = message.split('\n')
+      return { hash: hash.trim(), subject: subject.trim(), body: rest.join('\n').trim() }
     })
     .filter(
       ({ subject }) =>
@@ -402,7 +404,8 @@ function commitsSinceLastTag() {
         !/^wip\b/i.test(subject) &&
         !/^(fixup|squash)!/.test(subject),
     )
-  return { lastTag, commits, subjects: commits.map((c) => c.subject) }
+  const kept = withoutRevertedCommits(commits)
+  return { lastTag, commits: kept, subjects: kept.map((c) => c.subject) }
 }
 
 /**
@@ -430,16 +433,31 @@ const CHANGELOG_SECTIONS = [
  * @returns {{type: string, scope: string|null, breaking: boolean, subject: string,
  *   releaseAs: string|null} | null} null when the subject is not Conventional Commits
  */
-function parseCommit(subject, body = '') {
+function parseCommit(subject, body = '', hash = '') {
   const match = /^([a-z]+)(?:\(([^)]+)\))?(!)?: (.+)$/i.exec(subject)
   if (!match) return null
   const [, type, scope, bang, text] = match
+  const shortHash = hash.slice(0, 7)
   // A breaking change is marked either by `!` in the header or a BREAKING CHANGE footer.
   const breaking = !!bang || /^BREAKING[ -]CHANGE:/m.test(body)
   // `Release-As: 1.2.3` in a commit body pins the next version, so the decision can live
   // in git history rather than on the command line.
   const releaseAs = /^Release-As:\s*v?(\S+)/im.exec(body)?.[1] ?? null
-  return { type: type.toLowerCase(), scope: scope ?? null, breaking, subject: text, releaseAs }
+  // Issues this commit closes, so the notes can link them the way a reader expects.
+  const closes = [...`${subject}\n${body}`.matchAll(CLOSES)].map((m) => m[1])
+  // A BREAKING CHANGE footer usually explains the break far better than the subject does.
+  const breakingNote =
+    /^BREAKING[ -]CHANGE:\s*([\s\S]+?)(?=\n\n|$)/m.exec(body)?.[1]?.trim() ?? null
+  return {
+    type: type.toLowerCase(),
+    scope: scope ?? null,
+    breaking,
+    subject: text,
+    hash: shortHash,
+    releaseAs,
+    closes: [...new Set(closes)],
+    breakingNote,
+  }
 }
 
 /**
@@ -452,7 +470,7 @@ function parseCommit(subject, body = '') {
  * @returns {{bump: string, breaking: string[], features: string[], releaseAs: string|null}}
  */
 function inferBump(commits, currentVersion, strategy = 'conventional') {
-  const parsed = commits.map((c) => parseCommit(c.subject, c.body)).filter(Boolean)
+  const parsed = commits.map((c) => parseCommit(c.subject, c.body, c.hash)).filter(Boolean)
   const releaseAs = parsed.find((c) => c.releaseAs)?.releaseAs ?? null
   const breaking = parsed.filter((c) => c.breaking).map((c) => c.subject)
   const features = parsed
@@ -476,14 +494,27 @@ function inferBump(commits, currentVersion, strategy = 'conventional') {
  *
  * @returns {string | null} markdown body, or null when nothing visible changed
  */
-function changelogFromCommits(commits) {
-  const parsed = commits.map((c) => parseCommit(c.subject, c.body)).filter(Boolean)
+function changelogFromCommits(commits, links = null) {
+  const parsed = commits.map((c) => parseCommit(c.subject, c.body, c.hash)).filter(Boolean)
   const lines = []
+
+  /** One bullet: scope, text, a link to the commit, and any issues it closes. */
+  const bullet = (commit, text) => {
+    const scope = commit.scope ? `**${commit.scope}:** ` : ''
+    const parts = []
+    if (links && commit.hash) parts.push(`([${commit.hash}](${links.commit}/${commit.hash}))`)
+    if (commit.closes.length) {
+      const issues = commit.closes.map((n) => (links ? `[#${n}](${links.issue}/${n})` : `#${n}`))
+      parts.push(`closes ${issues.join(', ')}`)
+    }
+    return `- ${scope}${text}${parts.length ? ` ${parts.join(', ')}` : ''}`
+  }
 
   const breaking = parsed.filter((c) => c.breaking)
   if (breaking.length) {
     lines.push('### ⚠ BREAKING CHANGES', '')
-    for (const c of breaking) lines.push(`- ${c.scope ? `**${c.scope}:** ` : ''}${c.subject}`)
+    // The footer explains the break; the subject only says what changed.
+    for (const c of breaking) lines.push(bullet(c, c.breakingNote ?? c.subject))
     lines.push('')
   }
 
@@ -494,11 +525,66 @@ function changelogFromCommits(commits) {
     )
     if (!inSection.length) continue
     lines.push(`### ${section}`, '')
-    for (const c of inSection) lines.push(`- ${c.scope ? `**${c.scope}:** ` : ''}${c.subject}`)
+    for (const c of inSection) lines.push(bullet(c, c.subject))
     lines.push('')
   }
 
   return lines.length ? lines.join('\n').trim() : null
+}
+
+/**
+ * Per-forge URL shapes and the words that close an issue, following
+ * @semantic-release/release-notes-generator's hosts-config. The path segments genuinely
+ * differ: Bitbucket uses /issue/ and /commits/ where GitHub uses /issues/ and /commit/.
+ */
+const HOSTS = {
+  'github.com': { issue: 'issues', commit: 'commit' },
+  'gitlab.com': { issue: 'issues', commit: 'commit' },
+  'bitbucket.org': { issue: 'issue', commit: 'commits' },
+}
+const DEFAULT_HOST = { issue: 'issues', commit: 'commit' }
+
+/** Words that mark an issue reference as closed by the commit. */
+const CLOSES = /\b(?:close[sd]?|closing|fix(?:e[sd])?|fixing|resolve[sd]?|resolving)\s+#(\d+)/gi
+
+/**
+ * The repository behind `origin`, for building links.
+ *
+ * Handles both URL forms git uses: `https://host/owner/repo.git` and the SCP-like
+ * `git@host:owner/repo.git`, which is not a URL and does not parse as one.
+ *
+ * @returns {{base: string, issue: string, commit: string} | null}
+ */
+function remoteLinks(remote) {
+  const url = tryRead('git', ['remote', 'get-url', remote])
+  if (!url) return null
+  const scp = /^(?:[^@]+@)?([^:/]+):(.+?)(?:\.git)?$/.exec(url.replace(/^ssh:\/\//, ''))
+  const web = /^[a-z+]+:\/\/(?:[^@]+@)?([^/]+)\/(.+?)(?:\.git)?$/i.exec(url)
+  const [, host, path] = web ?? scp ?? []
+  if (!host || !path) return null
+  const shape = HOSTS[host.toLowerCase()] ?? DEFAULT_HOST
+  return {
+    base: `https://${host}/${path}`,
+    issue: `https://${host}/${path}/${shape.issue}`,
+    commit: `https://${host}/${path}/${shape.commit}`,
+  }
+}
+
+/**
+ * Drop commits that were reverted within the same release, and the reverts themselves —
+ * neither belongs in notes describing what changed. A `git revert` records the reverted
+ * hash in its body, which is what pairs them up.
+ */
+function withoutRevertedCommits(commits) {
+  const reverted = new Set()
+  for (const { body } of commits) {
+    const match = /This reverts commit ([0-9a-f]{7,40})/i.exec(body ?? '')
+    if (match) reverted.add(match[1].slice(0, 7))
+  }
+  if (!reverted.size) return commits
+  return commits.filter(
+    (c) => !reverted.has((c.hash ?? '').slice(0, 7)) && !/This reverts commit/i.test(c.body ?? ''),
+  )
 }
 
 const CONVENTIONAL_TYPES = 'build|chore|ci|docs|feat|fix|perf|refactor|revert|style|test'
@@ -1507,7 +1593,7 @@ const notesDeferred = !!(dirty && runs('commit') && assistant)
 function draftNotesFor(v) {
   const { lastTag, subjects, commits } = commitsSinceLastTag()
   if (!commits.length) return null
-  if (!assistant) return changelogFromCommits(commits)
+  if (!assistant) return changelogFromCommits(commits, remoteLinks(config.remote))
   if (shallow) {
     warn(
       `shallow clone: only ${subjects.length} commit(s) are visible, so the notes will ` +
@@ -1515,7 +1601,10 @@ function draftNotesFor(v) {
     )
   }
   note(`drafting notes from ${subjects.length} commit(s) with ${assistantName}...`)
-  return draftReleaseNotes(v, subjects, lastTag) ?? changelogFromCommits(commits)
+  return (
+    draftReleaseNotes(v, subjects, lastTag) ??
+    changelogFromCommits(commits, remoteLinks(config.remote))
+  )
 }
 if (config.changelog && existsSync(config.changelog)) {
   const text = readFileSync(config.changelog, 'utf8')
