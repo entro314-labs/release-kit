@@ -880,8 +880,11 @@ if (currentVersion && !parseVersion(currentVersion)) {
 }
 
 /** Used for display, the registry lookup, and the %n token. */
+const goModule = existsSync('go.mod')
+  ? (/^module\s+(\S+)/m.exec(readFileSync('go.mod', 'utf8'))?.[1] ?? null)
+  : null
 const projectName =
-  manifest?.name ?? (versionFile ? readNameFrom(versionFile) : null) ?? basename(root)
+  manifest?.name ?? (versionFile ? readNameFrom(versionFile) : null) ?? goModule ?? basename(root)
 
 // Validate every name that was asked for, not just the ones that survive: a typo in
 // --skip would otherwise delete nothing and silently run the step you meant to drop.
@@ -1002,14 +1005,29 @@ const expandShell = (template) => expandWith(template, shellQuote)
 const publishCommand = runs('publish') && config.publish ? expandShell(config.publish) : null
 
 /**
- * npm and pnpm answer `whoami` and `view` identically and share `~/.npmrc`, so whichever
- * one publishes can also run the registry preflight. Checking with the wrong one mislabels
- * the result. A publish command driving anything else (vsce, a shell pipeline) is left
- * alone — it cannot be introspected, and guessing would invent failures.
+ * Registries whose preflight can be run, keyed by the first word of the publish command.
+ * Each declares how that CLI answers "who am I" and "does this version already exist";
+ * either may be null when the tool has no such notion. A publish command outside this
+ * table (vsce, a shell pipeline) is run as written with no preflight — it cannot be
+ * introspected, and guessing would invent failures.
  */
-const REGISTRY_CLIS = new Set(['npm', 'pnpm'])
+const REGISTRIES = {
+  npm: { whoami: ['whoami'], published: (name, v) => ['view', `${name}@${v}`, 'version'] },
+  pnpm: { whoami: ['whoami'], published: (name, v) => ['view', `${name}@${v}`, 'version'] },
+  bun: {
+    whoami: ['pm', 'whoami'],
+    published: (name, v) => ['pm', 'view', `${name}@${v}`, 'version'],
+  },
+  // uv authenticates with a token from the environment rather than a logged-in session,
+  // and skips duplicate uploads itself via --check-url, so there is no version lookup.
+  uv: { env: ['UV_PUBLISH_TOKEN', 'UV_PUBLISH_PASSWORD'], login: 'set UV_PUBLISH_TOKEN' },
+  // For Go the tag is the release; `go list` warms the module proxy and doubles as the
+  // check for whether this version is already resolvable.
+  go: { published: (name, v) => ['list', '-m', `${name}@${v}`] },
+}
+
 const publishCli = publishCommand?.trim().split(/\s+/)[0]
-const registryCli = REGISTRY_CLIS.has(publishCli) ? publishCli : null
+const registry = publishCli ? REGISTRIES[publishCli] : null
 
 /**
  * CI publishing over OIDC ("trusted publishing") carries no token at all: `whoami` fails
@@ -1136,25 +1154,33 @@ if (!publishCommand) {
   note(runs('publish') ? 'no publish command configured' : 'publish step not selected')
 } else if (manifest?.private) {
   fail('package.json is private but a publish command is configured')
-} else if (!registryCli) {
+} else if (!registry) {
   ok(`publish: ${publishCommand}`)
 } else {
   if (isTrustedPublishing) {
     ok('trusted publishing (OIDC) — no token needed')
-  } else {
-    const user = tryRead(registryCli, ['whoami'])
+  } else if (registry.env) {
+    // Token-in-the-environment auth: there is no session to interrogate, only credentials.
+    const found = registry.env.find((name) => process.env[name])
+    if (found) ok(`${publishCli} credentials found (${found})`)
+    else fail(`${publishCli} has no publish credentials — ${registry.login}`)
+  } else if (registry.whoami) {
+    const user = tryRead(publishCli, registry.whoami)
     if (user === null) {
       // npm replaced long-lived tokens with two-hour sessions in December 2025, so the
       // usual cause is an expired session rather than a missing login.
       fail(
-        `${registryCli} is not authenticated — run \`${registryCli} login\`. ` +
+        `${publishCli} is not authenticated — run \`${publishCli} login\`. ` +
           'npm logins are two-hour sessions, so an earlier one may have expired.',
       )
-    } else ok(`${registryCli} authenticated (${user || 'unknown user'})`)
+    } else ok(`${publishCli} authenticated (${user || 'unknown user'})`)
   }
-  alreadyPublished = succeeds(registryCli, ['view', `${projectName}@${version}`, 'version'])
-  if (alreadyPublished) {
-    note(`${projectName}@${version} is already on the registry — will skip publishing`)
+
+  if (registry.published) {
+    alreadyPublished = succeeds(publishCli, registry.published(projectName, version))
+    if (alreadyPublished) {
+      note(`${projectName}@${version} is already published — will skip the publish step`)
+    }
   }
 }
 
