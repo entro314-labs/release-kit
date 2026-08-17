@@ -229,6 +229,22 @@ function read(command, args) {
   }).trim()
 }
 
+/**
+ * Whether GitHub knows the key git signs with.
+ *
+ * Compares key material rather than fingerprints, so no extra process is spawned per key.
+ *
+ * @returns {boolean | null} null when it cannot be determined — gh missing, token without
+ *   the scope to list signing keys, or no network. An unanswerable check is not a failure.
+ */
+function signingKeyRegistered(keyPath) {
+  const local = readFileSync(keyPath, 'utf8').trim().split(/\s+/)[1]
+  if (!local) return null
+  const listed = tryRead('gh', ['api', 'user/ssh_signing_keys', '--jq', '.[].key'])
+  if (listed === null) return null
+  return listed.split('\n').some((key) => key.trim().split(/\s+/)[1] === local)
+}
+
 /** Read-only command → trimmed stdout, or null when it exits non-zero. */
 function tryRead(command, args) {
   try {
@@ -1351,6 +1367,22 @@ if (signsSomething && signingKeys.length) {
     )
   } else {
     ok(`signing commits and tags (${format})`)
+    // git signs happily with a key GitHub has never seen, which is how a repository fills
+    // up with commits that are locally valid and permanently "Unverified". Only GitHub can
+    // answer this, and only when the token carries the scope to list signing keys — so an
+    // unanswerable check stays silent rather than guessing.
+    if (format === 'ssh' && keyPath && existsSync(keyPath) && runs('release')) {
+      const registered = signingKeyRegistered(keyPath)
+      if (registered === false) {
+        warn(
+          'this signing key is not registered with GitHub, so the commits will show as ' +
+            'Unverified.\n       Add it: gh ssh-key add ' +
+            `${signingKey} --type signing`,
+        )
+      } else if (registered === true) {
+        ok('signing key is registered with GitHub')
+      }
+    }
   }
 }
 
