@@ -2,6 +2,21 @@
 
 All notable changes to @entro314labs/release-kit.
 
+## [Unreleased]
+
+### Fixed
+
+- **`--sync` no longer crashes when the script is piped from stdin.** Copying itself needs a
+  file on disk, and `import.meta.url` points at a synthetic `[eval]` path when piped, so it
+  failed on a missing file with a raw stack trace. It now explains the situation.
+
+### Documentation
+
+- Install is organised by what the project is — devDependency for Node, global for
+  non-Node, pinned `npx` for CI — plus vendored and piped for the cases that want no
+  registry or no install at all. Node 18+ is called out as a requirement even for Rust,
+  Python and Go projects, since there is no standalone binary.
+
 ## [2.1.0] - 2026-08-17
 
 ### Added

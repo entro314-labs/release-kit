@@ -762,6 +762,15 @@ if (flag('--help') || flag('-h')) {
 // --sync copies this file into other projects and exits; it touches no git state.
 if (flag('--sync')) {
   const self = new URL(import.meta.url).pathname
+  // Piped from stdin (`curl … | node -`) there is no file to copy: import.meta.url points
+  // at a synthetic [eval] path. Say so instead of failing on a missing file.
+  if (!existsSync(self)) {
+    abort(
+      '--sync copies this script from disk, and it was piped from stdin so there is no ' +
+        'file to copy.\n  Run it from an installed copy instead: ' +
+        'npx @entro314labs/release-kit --sync <dir>',
+    )
+  }
   const targets = argv.slice(argv.indexOf('--sync') + 1).filter((a) => !a.startsWith('-'))
   if (!targets.length) abort('--sync needs at least one project directory')
 

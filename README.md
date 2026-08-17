@@ -65,45 +65,70 @@ Released v2.5.0
 
 ## 📦 Install
 
-**As a devDependency** — the normal choice. Updates arrive through your package manager.
+Pick by what the project is, not by preference.
+
+### Node projects — devDependency
+
+Pins the version, so every machine and CI run behave identically.
 
 ```sh
 pnpm add -D @entro314labs/release-kit
 ```
 
 ```json
-{
-  "scripts": {
-    "release": "release-kit"
-  }
-}
+{ "scripts": { "release": "release-kit" } }
 ```
 
-**Without installing** — for a one-off release, or a project you do not want to add a
-dependency to:
+### Non-Node projects — global install
+
+A Rust, Python or Go repository has no manifest to hang a devDependency on, so install it
+once and use it everywhere.
 
 ```sh
-npx @entro314labs/release-kit --dry-run
+npm i -g @entro314labs/release-kit
+release-kit minor
 ```
 
-**Vendored** — for a project that should not depend on the registry it is about to publish
-to, or one that needs releases to work offline. `--sync` copies the file into
-`scripts/release.mjs`:
+### CI, any language — pinned npx
+
+No global state to drift, no install step, and the version is explicit in the command.
 
 ```sh
-npx @entro314labs/release-kit --sync .
+npx @entro314labs/release-kit@2.1.0 minor --yes
+```
+
+### Vendored — no registry at release time
+
+For a project that should not depend on the registry it is about to publish to, or that
+needs releases to work offline. The file is self-contained, so a copy is a complete install.
+
+```sh
+npx @entro314labs/release-kit --sync .        # writes scripts/release.mjs
 ```
 
 ```json
-{
-  "scripts": {
-    "release": "node scripts/release.mjs"
-  }
-}
+{ "scripts": { "release": "node scripts/release.mjs" } }
 ```
 
-All three run the same file. Zero-config works on the conventions below; add a
-[`release.config.json`](#️-configuration) only for what differs.
+### Piped — nothing installed at all
+
+`release.mjs` runs straight from stdin, arguments and all. Useful for a one-off release on a
+machine you do not want to install anything on.
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/entro314-labs/release-kit/v2.1.0/release.mjs \
+  | node - minor --yes
+```
+
+Pin the URL to a tag, never `main`: piping an unpinned remote script into an interpreter
+means whatever is at that URL runs against your repository and your credentials. `--sync` is
+the one thing that does not work this way — copying itself needs a file on disk.
+
+> **All five paths run the same file and need Node 18+.** That includes the Rust, Python and
+> Go projects: `release-kit` is a Node program regardless of what it is releasing.
+
+Zero-config works on the conventions below; add a [`release.config.json`](#️-configuration)
+only for what differs.
 
 ## ⚡ Usage
 
@@ -445,7 +470,8 @@ including a directory that is not a repository.
 
 ## 📋 Requirements
 
-- Node 18+ (uses `node:readline/promises` and `Array.prototype.at`)
+- **Node 18+ — including for Rust, Python and Go projects.** `release-kit` is a Node
+  program whatever it releases; there is no standalone binary.
 - `git`
 - `gh`, authenticated — only when creating GitHub releases
 - Whatever the `publish` command needs — for the default, a live `npm login` session
