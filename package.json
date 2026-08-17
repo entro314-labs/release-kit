@@ -1,6 +1,6 @@
 {
   "name": "@entro314-labs/release-kit",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Single-file, zero-dependency release mechanism for JS/TS/Node projects: version bump, changelog roll, commit, annotated tag, push, publish, GitHub release",
   "keywords": [
     "changelog",
@@ -22,7 +22,7 @@
   "author": "Dominikos Pritis <idominikos@outlook.com>",
   "repository": {
     "type": "git",
-    "url": "https://github.com/entro314-labs/release-kit.git"
+    "url": "git+https://github.com/entro314-labs/release-kit.git"
   },
   "bin": {
     "release-kit": "release.mjs"

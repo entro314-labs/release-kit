@@ -152,6 +152,20 @@ function abort(message) {
   process.exit(1)
 }
 
+/**
+ * A command failed after the release started mutating. The command has already printed its
+ * own error to stderr, so say only what that does not: where it stopped, and that this is
+ * resumable. Without this the process dies on an unhandled child-process error and buries
+ * the real cause under a Node stack trace.
+ */
+function abortMidRelease(commandLine) {
+  abort(
+    `\`${commandLine}\` failed — see its output above.\n\n` +
+      '  The release stopped partway through. Fix the cause and re-run the same command:\n' +
+      '  the steps that already completed are detected and skipped.',
+  )
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // COMMANDS
 // ─────────────────────────────────────────────────────────────────────────────
@@ -197,7 +211,11 @@ function mutate(command, args, options = {}) {
     return
   }
   console.log(`  ${dim(`$ ${line}`)}`)
-  execFileSync(command, args, { stdio: ['pipe', 'inherit', 'inherit'], ...options })
+  try {
+    execFileSync(command, args, { stdio: ['pipe', 'inherit', 'inherit'], ...options })
+  } catch {
+    abortMidRelease(line)
+  }
 }
 
 /**
@@ -210,7 +228,11 @@ function mutateShell(commandLine) {
     return
   }
   console.log(`  ${dim(`$ ${commandLine}`)}`)
-  execSync(commandLine, { stdio: 'inherit' })
+  try {
+    execSync(commandLine, { stdio: 'inherit' })
+  } catch {
+    abortMidRelease(commandLine)
+  }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
