@@ -14,6 +14,11 @@ All notable changes to @entro314labs/release-kit.
 
 ### Added
 
+- **The signing key is checked against GitHub.** git signs happily with a key GitHub has
+  never seen, which is how a repository fills with locally-valid commits that stay
+  permanently "Unverified". When `gh` can list the account's signing keys they are compared;
+  when it cannot — `gh` absent, token without the scope, no network — the check stays
+  silent. A warning, never a failure: an unverified commit is cosmetic.
 - **`release-kit auto` derives the version from Conventional Commits**, following
   release-please's default strategy: breaking is major, `feat:` is minor, everything else is
   a patch, softened below `1.0.0` where a breaking change bumps the minor instead of jumping
@@ -44,6 +49,17 @@ All notable changes to @entro314labs/release-kit.
   config resolution, and says how to disable signing for one run if it does not.
 
 ### Fixed
+
+- **Two warnings still named the pre-2.0 flags.** An assistant that takes no model or effort
+  flag reported `--model`/`--effort` rather than `--assistant-model`/`--assistant-effort`.
+
+### Documentation
+
+- The flag table, config table and preflight list were audited against the code and had
+  drifted: `--commit` and the three assistant flags were undocumented, `steps`,
+  `versionFile`, `versioning` and `assistant` were missing from the config table,
+  `versionFiles` still claimed JSON-only, and `"publish": null` was still described as
+  "skips publishing" rather than "no command configured".
 
 - **A detached HEAD is a preflight failure** rather than a confusing branch mismatch. Tag
   and pull-request checkouts leave no branch to push; it previously compared the literal

@@ -94,7 +94,7 @@ release-kit minor
 No global state to drift, no install step, and the version is explicit in the command.
 
 ```sh
-npx @entro314labs/release-kit@2.1.0 minor --yes
+npx @entro314labs/release-kit@2.3.0 minor --yes
 ```
 
 ### Vendored — no registry at release time
@@ -116,7 +116,7 @@ npx @entro314labs/release-kit --sync .        # writes scripts/release.mjs
 machine you do not want to install anything on.
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/entro314-labs/release-kit/v2.1.0/release.mjs \
+curl -fsSL https://raw.githubusercontent.com/entro314-labs/release-kit/v2.3.0/release.mjs \
   | node - minor --yes
 ```
 
@@ -172,16 +172,20 @@ Prerelease bumps need `--preid` unless the current version already carries one t
 
 ### Flags
 
-| Flag                | Effect                                                                     |
-| ------------------- | -------------------------------------------------------------------------- |
-| `--dry-run`         | Print every step, execute nothing. Preflight still runs and still reports. |
-| `--yes`, `-y`       | Skip the confirmation prompt.                                              |
-| `--preid <id>`      | Prerelease identifier: `alpha`, `beta`, `rc`, `next`, `nightly`, `canary`. |
-| `--dist-tag <name>` | Override the npm dist-tag. Always wins over the derived one.               |
-| `--only <steps>`    | Run only these steps, comma-separated.                                     |
-| `--skip <steps>`    | Run every step except these.                                               |
-| `--sync <dir>...`   | Copy this script into other projects and exit. Touches no git state.       |
-| `--help`, `-h`      | Full flag list.                                                            |
+| Flag                         | Effect                                                                     |
+| ---------------------------- | -------------------------------------------------------------------------- |
+| `--only <steps>`             | Run only these steps, comma-separated.                                     |
+| `--skip <steps>`             | Run every step except these.                                               |
+| `--commit`                   | Add the opt-in `commit` step: commit a dirty tree with a drafted message.  |
+| `--dry-run`                  | Print every step, execute nothing. Preflight still runs and still reports. |
+| `--yes`, `-y`                | Skip the confirmation prompt.                                              |
+| `--preid <id>`               | Prerelease identifier: `alpha`, `beta`, `rc`, `next`, `nightly`, `canary`. |
+| `--dist-tag <name>`          | Override the npm dist-tag. Always wins over the derived one.               |
+| `--assistant <name>`         | Drafting CLI: `auto`, `none`, `claude`, `codex`.                           |
+| `--assistant-model <name>`   | Model the assistant runs with.                                             |
+| `--assistant-effort <level>` | Reasoning effort the assistant runs with.                                  |
+| `--sync <dir>...`            | Copy this script into other projects and exit. Touches no git state.       |
+| `--help`, `-h`               | Full flag list.                                                            |
 
 ## 🧩 Steps
 
@@ -256,17 +260,18 @@ falling through to `latest` would put a prerelease on the stable line where ever
 Every check runs and every failure is reported before it aborts once with the whole list,
 rather than stopping at the first problem.
 
-- The target version is greater than the current one
-- Working tree is clean
-- On the configured branch
+- The target version is greater than the current one — and for `auto`, which bump the
+  commits imply and why
+- Working tree is clean, or listed for commit when the `commit` step runs
+- On the configured branch, and not on a detached HEAD
 - The remote exists, is reachable, and the branch is not behind it
 - The tag is free — or already exists at `HEAD`, in which case it is reused
 - `gh` is installed and authenticated
-- Commit and tag signing can actually sign, when `commit.gpgsign` or `tag.gpgsign` is on
-- The publishing CLI is authenticated, and the version is not already on the registry
+- Commit and tag signing can actually sign, and the key is one GitHub will accept
+- The publishing CLI is authenticated, and the version is not already published
 - Configured release assets exist
-- A changelog section for the version exists _(a warning, not a failure — it falls back
-  to generated notes)_
+- A shallow clone is reported, since it truncates the history notes come from _(warning)_
+- A changelog section for the version exists _(warning — it falls back to generated notes)_
 
 Under `--dry-run` the failures are reported and then the remaining steps are shown anyway,
 so you can see the whole plan without fixing the blockers first.
@@ -348,12 +353,16 @@ rather than being silently ignored.
 
 | Key             | Default                  | Meaning                                                      |
 | --------------- | ------------------------ | ------------------------------------------------------------ |
+| `steps`         | all but `commit`         | Which steps run; the order is fixed                          |
 | `tagPrefix`     | `"v"`                    | Prepended to the version to form the tag                     |
 | `branch`        | `"main"`                 | The only branch a release may run from; `null` allows any    |
 | `remote`        | `"origin"`               | Git remote to push to                                        |
-| `changelog`     | `"CHANGELOG.md"`         | Changelog path; `null` disables changelog handling           |
-| `versionFiles`  | `[]`                     | Extra JSON files whose top-level `"version"` is kept in sync |
-| `publish`       | `"npm publish --tag %d"` | Publish command; `null` skips publishing                     |
+| `changelog`     | `"CHANGELOG.md"`         | Changelog path; `null` for a project without one             |
+| `versionFile`   | detected                 | Where the version lives; `null` versions by tag alone        |
+| `versionFiles`  | `[]`                     | Further files kept in sync; a path or `{ path, pattern }`    |
+| `publish`       | `"npm publish --tag %d"` | Publish command; `null` means none is configured             |
+| `versioning`    | `"conventional"`         | How `auto` infers; or `always-patch` / `-minor` / `-major`   |
+| `assistant`     | `null`                   | Drafting CLI: a name, `"auto"`, or `{ tool, model, effort }` |
 | `commitMessage` | `"chore(release): %t"`   | Release commit subject                                       |
 | `releaseTitle`  | `"%t"`                   | GitHub release title                                         |
 | `assets`        | `[]`                     | Files attached to the GitHub release                         |
@@ -373,7 +382,7 @@ Non-interactive by default: the confirmation prompt is skipped when stdin is not
   with:
     fetch-depth: 0 # release notes and the last-tag lookup need real history
 - id: release
-  run: npx @entro314labs/release-kit@2.1.0 minor --yes
+  run: npx @entro314labs/release-kit@2.3.0 minor --yes
   env:
     GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 - run: echo "shipped ${{ steps.release.outputs.tag }} ${{ steps.release.outputs.release-url }}"

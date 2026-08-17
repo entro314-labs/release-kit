@@ -1305,9 +1305,9 @@ if (runs('commit') && !assistant) {
     .join(', ')
   ok(`assistant: ${assistantName}${detail ? ` (${detail})` : ''}`)
   if (assistantModel && !assistant.model)
-    warn(`${assistantName} takes no model flag — --model ignored`)
+    warn(`${assistantName} takes no model flag — --assistant-model ignored`)
   if (assistantEffort && !assistant.effort)
-    warn(`${assistantName} takes no effort flag — --effort ignored`)
+    warn(`${assistantName} takes no effort flag — --assistant-effort ignored`)
 }
 
 const branch = tryRead('git', ['rev-parse', '--abbrev-ref', 'HEAD'])
