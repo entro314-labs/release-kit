@@ -2,6 +2,23 @@
 
 All notable changes to @entro314labs/release-kit.
 
+## [2.3.3] - 2026-08-17
+
+### Added
+
+- `notesFile` option to write the generated release notes to a file, so build tools can pick them up when they own the artifacts and the GitHub release.
+
+### Changed
+
+- Generated release notes now link commit hashes and issue references using the detected forge's URL format, use the `BREAKING CHANGE` footer text in place of the commit subject when present, and exclude commits that were reverted within the same release.
+
+### Fixed
+
+- Publishing now uses the command matching the detected manifest (`npm` for `package.json`, `cargo` for `Cargo.toml`, none otherwise) instead of always running `npm publish`, so zero-config releases of non-Node projects no longer attempt an npm publish.
+- The drafted commit message is shown before the confirmation prompt, and declining now restores the index.
+- A change set spanning more than two top-level paths is called out before committing, since one commit gets one subject.
+- `--sync` no longer requires a `package.json`, so non-Node projects can vendor the script.
+
 ## [Unreleased]
 
 ## [2.3.2] - 2026-08-17
