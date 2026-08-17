@@ -1,14 +1,67 @@
-# @entro314labs/release-kit
+<div align="center">
 
-A single-file release mechanism for any JS/TS/Node project: version bump → changelog roll
-→ commit → annotated tag → push → registry publish → GitHub release.
+# 🚀 release-kit
+
+**Single-file, zero-dependency release automation for JS/TS/Node projects.**
+
+`version bump` → `changelog` → `commit` → `annotated tag` → `push` → `publish` → `GitHub release`
+
+[![npm](https://img.shields.io/npm/v/@entro314labs/release-kit?logo=npm&color=cb3837)](https://www.npmjs.com/package/@entro314labs/release-kit)
+[![downloads](https://img.shields.io/npm/dm/@entro314labs/release-kit?color=cb3837)](https://www.npmjs.com/package/@entro314labs/release-kit)
+[![unpacked size](https://img.shields.io/npm/unpacked-size/@entro314labs/release-kit?color=blueviolet)](https://www.npmjs.com/package/@entro314labs/release-kit?activeTab=code)
+[![dependencies](https://img.shields.io/badge/dependencies-0-brightgreen)](#-requirements)
+[![node](https://img.shields.io/badge/node-%E2%89%A5%2018-339933?logo=node.js&logoColor=white)](#-requirements)
+[![license](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
+
+</div>
 
 `release.mjs` imports nothing but `node:*`. No dependencies, no build step, no config
 required — the file _is_ the tool. That is why it can be installed as a package, run
 straight from the registry, or vendored into a project as a plain file, with no difference
 in behaviour between them.
 
-## Install
+```console
+$ pnpm release minor
+
+acme-toolkit release
+  2.4.0 → 2.5.0   tag v2.5.0   dist-tag latest
+
+[1] Preflight
+  ok   version 2.4.0 → 2.5.0
+  ok   working tree clean
+  ok   on main
+  ok   remote origin
+  ok   up to date with origin/main
+  ok   tag v2.5.0 is free
+  ok   gh authenticated (octocat)
+  ok   npm authenticated (octocat)
+  ok   CHANGELOG.md: [Unreleased] will become [2.5.0]
+
+[2] Write version 2.5.0
+[3] Roll CHANGELOG.md to 2.5.0
+[4] Commit
+[5] Annotated tag v2.5.0
+[6] Push branch and tag to origin
+[7] Publish to the registry (dist-tag latest)
+[8] GitHub release v2.5.0
+
+Released v2.5.0
+```
+
+## Contents
+
+|                                                                         |                                         |
+| ----------------------------------------------------------------------- | --------------------------------------- |
+| [📦 Install](#-install)                                                 | package, `npx`, or vendored file        |
+| [⚡ Usage](#-usage)                                                     | targets, bumps, flags                   |
+| [🔁 What a release does](#-what-a-release-does)                         | the seven steps, notes, dist-tags       |
+| [✅ Preflight](#-preflight)                                             | what is checked before anything mutates |
+| [♻️ Recovering from a failed run](#️-recovering-from-a-failed-run)       | why re-running is safe                  |
+| [⚙️ Configuration](#️-configuration)                                     | `release.config.json`, publishing, auth |
+| [🔄 Keeping vendored copies in sync](#-keeping-vendored-copies-in-sync) | `--sync`                                |
+| [📋 Requirements](#-requirements)                                       | Node, `git`, `gh`                       |
+
+## 📦 Install
 
 **As a devDependency** — the normal choice. Updates arrive through your package manager.
 
@@ -48,9 +101,9 @@ npx @entro314labs/release-kit --sync .
 ```
 
 All three run the same file. Zero-config works on the conventions below; add a
-[`release.config.json`](#configuration) only for what differs.
+[`release.config.json`](#️-configuration) only for what differs.
 
-## Usage
+## ⚡ Usage
 
 ```sh
 pnpm release                      # release the version already in package.json
@@ -76,7 +129,8 @@ already says — which is the mode to use when a version bump landed in an earli
 
 A `major`/`minor`/`patch` bump off a prerelease releases that prerelease's base version
 when the base already satisfies the bump, so promoting a release candidate is a plain
-`patch`. The arithmetic matches `semver.inc` exactly.
+`patch`. The arithmetic matches [`semver.inc`](https://github.com/npm/node-semver#functions)
+exactly, and precedence follows the [SemVer spec](https://semver.org/#spec-item-11).
 
 Prerelease bumps need `--preid` unless the current version already carries one to infer.
 
@@ -93,7 +147,7 @@ Prerelease bumps need `--preid` unless the current version already carries one t
 | `--sync <dir>...`  | Copy this script into other projects and exit. Touches no git state.       |
 | `--help`, `-h`     | Full flag list.                                                            |
 
-## What a release does
+## 🔁 What a release does
 
 Steps that do not apply are skipped silently — a project with no changelog, or with
 `publish` disabled, simply has fewer steps.
@@ -102,7 +156,8 @@ Steps that do not apply are skipped silently — a project with no changelog, or
    is replaced in place, so key order, indentation, and trailing newline all survive. A
    `package-lock.json` is resynced, because it embeds the root version twice.
 2. **Roll the changelog**: `## [Unreleased]` becomes `## [x.y.z] - YYYY-MM-DD`, with a
-   fresh empty `## [Unreleased]` reopened above it for the next cycle.
+   fresh empty `## [Unreleased]` reopened above it for the next cycle — the
+   [Keep a Changelog](https://keepachangelog.com/) convention.
 3. **Commit** the files that actually changed.
 4. **Tag**, annotated, with the release notes as the annotation — so a CI workflow can
    read the notes straight off the tag instead of re-deriving them.
@@ -127,7 +182,8 @@ changelog entry. It is written once and lands in three places.
 
 ### npm dist-tags
 
-The dist-tag is derived from the version, never guessed:
+The [dist-tag](https://docs.npmjs.com/cli/commands/npm-dist-tag) is derived from the
+version, never guessed:
 
 | Version                | dist-tag                                                      |
 | ---------------------- | ------------------------------------------------------------- |
@@ -140,7 +196,7 @@ The refusal is deliberate: an unrecognised prerelease identifier has no safe cha
 falling through to `latest` would put a prerelease on the stable line where every
 `npm install` picks it up. Pass `--tag <dist-tag>` to choose a channel explicitly.
 
-## Preflight
+## ✅ Preflight
 
 Every check runs and every failure is reported before it aborts once with the whole list,
 rather than stopping at the first problem.
@@ -159,7 +215,7 @@ rather than stopping at the first problem.
 Under `--dry-run` the failures are reported and then the remaining steps are shown anyway,
 so you can see the whole plan without fixing the blockers first.
 
-## Recovering from a failed run
+## ♻️ Recovering from a failed run
 
 Re-run the same command. Every step is idempotent:
 
@@ -177,7 +233,7 @@ it stopped. There is no cleanup step, no `--resume`, and nothing to remember.
 The one case that is not recoverable by re-running is a tag that exists at a _different_
 commit than `HEAD`. That is a genuine conflict, and it aborts rather than guessing.
 
-## Configuration
+## ⚙️ Configuration
 
 `release.config.json`, beside `package.json`. Every key is optional; unknown keys abort
 rather than being silently ignored.
@@ -217,9 +273,11 @@ to introspect.
 Two npm behaviours are handled automatically:
 
 - **`npm login` issues a two-hour session**, not a durable token. Classic tokens were
-  permanently revoked in December 2025. A login from earlier in the day has expired, and
+  [permanently revoked in December 2025](https://github.blog/changelog/2025-12-09-npm-classic-tokens-revoked-session-based-auth-and-cli-token-management-now-available/).
+  A login from earlier in the day has expired, and
   the preflight failure says so rather than implying you never logged in.
-- **Trusted publishing (OIDC) carries no token at all.** In GitHub Actions with
+- **[Trusted publishing](https://docs.npmjs.com/trusted-publishers) (OIDC) carries no token
+  at all.** In GitHub Actions with
   `id-token: write`, or GitLab CI/CircleCI with `NPM_ID_TOKEN`, `whoami` fails while
   `publish` succeeds. That environment is detected and the auth check is skipped, so a
   valid CI release is not aborted over a missing token it does not need.
@@ -255,7 +313,7 @@ A project releasing off a non-default branch with a different tag scheme:
 }
 ```
 
-## Keeping vendored copies in sync
+## 🔄 Keeping vendored copies in sync
 
 Installed as a dependency, updates come from your package manager and there is nothing to
 sync. For projects using the vendored file, `--sync` pushes the current version out — to
@@ -270,7 +328,7 @@ if missing, skips directories with no `package.json`, and warns when a target la
 `release` npm script. It runs before any git resolution, so it works from anywhere,
 including a directory that is not a repository.
 
-## Requirements
+## 📋 Requirements
 
 - Node 18+ (uses `node:readline/promises` and `Array.prototype.at`)
 - `git`
@@ -278,11 +336,11 @@ including a directory that is not a repository.
 - Whatever the `publish` command needs — for the default, a live `npm login` session
   (two hours) or an OIDC trusted-publishing environment
 
-## Contributing
+## 🤝 Contributing
 
 The tool releases itself, so a change ships the same way it would in any consuming project:
 add a `## [Unreleased]` entry to `CHANGELOG.md`, then run `pnpm release <bump>` from a clone.
 
-## License
+## 📄 License
 
 MIT
