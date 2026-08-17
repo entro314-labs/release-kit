@@ -4,6 +4,8 @@ All notable changes to @entro314labs/release-kit.
 
 ## [Unreleased]
 
+## [2.2.0] - 2026-08-17
+
 ### Added
 
 - **Signing is checked before anything mutates.** With `commit.gpgsign` or `tag.gpgsign`
