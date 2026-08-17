@@ -58,8 +58,8 @@ import { createInterface } from 'node:readline/promises'
  *   branch          string   the only branch a release may run from; null to allow any
  *   remote          string   git remote to push to
  *   changelog       string   changelog path; null to disable changelog handling
- *   versionFile     string|object|null  where the project's version lives; null when the
- *                            repository versions by git tag alone
+ *   versionFile     string|object|null  where the project's version lives. Detected from
+ *                            the repository when unset; null when it versions by tag alone
  *   versionFiles    array    further files whose version is kept in sync; each is a path
  *                            or { path, pattern }
  *   publish         string   publish command; null to skip publishing entirely
@@ -98,7 +98,7 @@ const DEFAULTS = {
   branch: 'main',
   remote: 'origin',
   changelog: 'CHANGELOG.md',
-  versionFile: 'package.json',
+  versionFile: undefined,
   versionFiles: [],
   publish: 'npm publish --tag %d',
   commitMessage: 'chore(release): %t',
@@ -857,10 +857,8 @@ if (existsSync(localManifest) && localManifest !== rootManifest) {
 }
 process.chdir(root)
 
-const config = {
-  ...DEFAULTS,
-  ...(existsSync('release.config.json') ? readJson('release.config.json') : {}),
-}
+const userConfig = existsSync('release.config.json') ? readJson('release.config.json') : {}
+const config = { ...DEFAULTS, ...userConfig }
 const unknownKeys = Object.keys(config).filter((key) => !(key in DEFAULTS))
 if (unknownKeys.length) abort(`release.config.json has unknown keys: ${unknownKeys.join(', ')}`)
 
@@ -881,7 +879,33 @@ const parseStepList = (value) =>
  * tag alone and the version has to be passed explicitly.
  */
 const manifest = existsSync('package.json') ? readJson('package.json') : null
-const versionFile = config.versionFile ? versionSource(config.versionFile) : null
+
+/**
+ * Where this project keeps its version, when the config does not say. Checked in order of
+ * how definitively each file identifies a repository. `go.mod` resolves to null because Go
+ * modules carry no version — the tag is the version.
+ */
+function detectVersionFile() {
+  for (const candidate of ['package.json', 'pyproject.toml', 'Cargo.toml', 'VERSION']) {
+    if (existsSync(candidate)) return candidate
+  }
+  return null
+}
+
+// An explicit `versionFile: null` means "versions by tag" and must not be re-detected, so
+// the distinction is between the key being absent and the key being set to null.
+const configuredVersionFile = Object.hasOwn(userConfig, 'versionFile')
+  ? userConfig.versionFile
+  : detectVersionFile()
+const versionFile = configuredVersionFile ? versionSource(configuredVersionFile) : null
+// Only worth saying when it is not the conventional default.
+if (
+  !Object.hasOwn(userConfig, 'versionFile') &&
+  versionFile &&
+  versionFile.path !== 'package.json'
+) {
+  note(`version source: ${versionFile.path} (detected)`)
+}
 
 if (versionFile && !existsSync(versionFile.path)) {
   abort(`versionFile ${versionFile.path} does not exist`)

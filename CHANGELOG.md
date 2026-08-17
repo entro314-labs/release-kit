@@ -10,6 +10,11 @@ All notable changes to @entro314labs/release-kit.
 
 ### Added
 
+- **The version source is detected when unconfigured.** With no `versionFile` set it looks
+  for `package.json`, `pyproject.toml`, `Cargo.toml`, then `VERSION`, so a Python or Rust
+  project needs no configuration to release. Previously it insisted on `package.json` and
+  aborted in any repository without one. An explicit `versionFile: null` is still honoured
+  and never re-detected.
 - **GitHub Actions outputs.** A completed release writes `version`, `tag`, `name`,
   `dist-tag`, `steps`, `published` and `release-url` to `$GITHUB_OUTPUT`, so later steps can
   act on the result instead of re-deriving it. Nothing is written on a dry run, and an

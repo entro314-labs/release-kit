@@ -305,6 +305,10 @@ Anything else runs as written with no preflight. The project name comes from the
 `name` in `package.json`, `Cargo.toml` or `pyproject.toml`, `module` in `go.mod` — falling
 back to the repository directory.
 
+With no `versionFile` configured it is detected from the repository — `package.json`,
+`pyproject.toml`, `Cargo.toml`, then `VERSION` — so most projects need no config for it at
+all. Set it explicitly to override, or to `null` for a repository that versions by tag.
+
 The format is inferred from the file name: `.json` reads the `"version"` field, `.toml`
 reads the first `version = "x.y.z"` line, and any other file is treated as containing just
 the version. Only the version itself is rewritten, so comments and formatting survive — and
