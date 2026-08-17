@@ -1,4 +1,4 @@
-# @entro314-labs/release-kit
+# @entro314labs/release-kit
 
 A single-file release mechanism for any JS/TS/Node project: version bump → changelog roll
 → commit → annotated tag → push → registry publish → GitHub release.
@@ -13,7 +13,7 @@ in behaviour between them.
 **As a devDependency** — the normal choice. Updates arrive through your package manager.
 
 ```sh
-pnpm add -D @entro314-labs/release-kit
+pnpm add -D @entro314labs/release-kit
 ```
 
 ```json
@@ -28,7 +28,7 @@ pnpm add -D @entro314-labs/release-kit
 dependency to:
 
 ```sh
-npx @entro314-labs/release-kit --dry-run
+npx @entro314labs/release-kit --dry-run
 ```
 
 **Vendored** — for a project that should not depend on the registry it is about to publish
@@ -36,7 +36,7 @@ to, or one that needs releases to work offline. `--sync` copies the file into
 `scripts/release.mjs`:
 
 ```sh
-npx @entro314-labs/release-kit --sync .
+npx @entro314labs/release-kit --sync .
 ```
 
 ```json
@@ -263,7 +263,7 @@ sync. For projects using the vendored file, `--sync` pushes the current version 
 one project or to many at once:
 
 ```sh
-npx @entro314-labs/release-kit --sync ../project-a ../project-b
+npx @entro314labs/release-kit --sync ../project-a ../project-b
 ```
 
 It reports `installed`, `updated`, or `already up to date` per target, creates `scripts/`

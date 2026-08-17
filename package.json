@@ -1,5 +1,5 @@
 {
-  "name": "@entro314-labs/release-kit",
+  "name": "@entro314labs/release-kit",
   "version": "1.0.1",
   "description": "Single-file, zero-dependency release mechanism for JS/TS/Node projects: version bump, changelog roll, commit, annotated tag, push, publish, GitHub release",
   "keywords": [

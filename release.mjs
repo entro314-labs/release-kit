@@ -6,9 +6,9 @@
  * GitHub release. It imports nothing but `node:*`, which is why the same file works
  * installed as a package, run through `npx`, or vendored into a project's `scripts/`.
  *
- *   pnpm add -D @entro314-labs/release-kit    then "release": "release-kit"
- *   npx @entro314-labs/release-kit            no install
- *   npx @entro314-labs/release-kit --sync .   vendor it as scripts/release.mjs
+ *   pnpm add -D @entro314labs/release-kit    then "release": "release-kit"
+ *   npx @entro314labs/release-kit            no install
+ *   npx @entro314labs/release-kit --sync .   vendor it as scripts/release.mjs
  *
  *   release-kit                               release the version already in package.json
  *   release-kit 2.3.0                         release an explicit version

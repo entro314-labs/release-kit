@@ -1,6 +1,6 @@
 # Changelog
 
-All notable changes to @entro314-labs/release-kit.
+All notable changes to @entro314labs/release-kit.
 
 ## [1.0.0] - 2026-08-17
 
