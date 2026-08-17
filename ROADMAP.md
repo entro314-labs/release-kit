@@ -10,37 +10,25 @@ Nothing here is committed to or scheduled.
 
 Each of these was reproduced, not inferred.
 
-### `--commit` bundles an entire working tree into one commit
-
-It runs `git add --all` and writes a single Conventional Commits subject. Observed against
-a Go repository with 9 changed files spanning four concerns, and a Python one with 31. No
-honest subject covers that, and the commit is unreviewable afterwards.
-
-Options, roughly in order of cost: refuse above a threshold and say why; group by top-level
-directory and write one commit per group; or stage interactively. The first is honest and
-cheap, the second is the one people would actually want, and the third duplicates
-`git add -p`.
-
-### The drafted commit message is not shown before you approve
-
-The confirmation prompt runs before staging, and the message is drafted from the staged
-diff — so with `--commit` you approve a release without seeing the commit message it will
-write. Fixing it means either drafting twice (once for preview, once for real) or moving
-the prompt after staging, which changes what "confirm" means.
-
-### `--sync` refuses non-Node projects
-
-It skips any directory without a `package.json`, which predates language support. A Rust or
-Go project cannot vendor the script even though it runs there perfectly well. The check
-should be for a git repository, not a manifest — and the "add a `release` script" hint only
-applies where a manifest exists.
-
 ### The codex backend is unverified end-to-end
 
 `codex exec`'s flags, stdin behaviour and `--output-last-message` were verified against the
 installed CLI, and the integration is exercised against a stub that reproduces its noisy
 stdout. But no real `codex` call has ever been made through it — the account hit its usage
 limit during development. Treat it as untested until someone runs a release with it.
+
+## Resolved
+
+- **`--commit` bundling a whole working tree into one commit.** It still stages everything,
+  but the change set is now shown before the prompt and a spread across more than two
+  top-level paths is called out as probably more than one piece of work. Splitting commits
+  automatically was rejected: it duplicates `git add -p` and guesses at intent.
+- **The drafted commit message not being visible before approval.** Staging and drafting now
+  happen before the prompt, so the message shown is the one that will be written. Declining
+  runs `git reset`, restoring the index exactly — `git add` touches only the index, never the
+  working tree.
+- **`--sync` refusing non-Node projects.** It now requires a directory rather than a
+  manifest, and only suggests wiring up a `release` script where a `package.json` exists.
 
 ## Missing infrastructure
 

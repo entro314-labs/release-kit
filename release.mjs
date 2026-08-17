@@ -383,7 +383,7 @@ function commitsSinceLastTag() {
   // separator keeps multi-line messages parseable when splitting the log back apart.
   const raw = tryRead('git', ['log', `--format=%B%x1e`, range]) ?? ''
   const commits = raw
-    .split('\u001e')
+    .split('\u001E')
     .map((entry) => entry.trim())
     .filter(Boolean)
     .map((entry) => {
@@ -766,7 +766,8 @@ function rollUnreleased(text, version, date) {
 
   // An empty [Unreleased] has nothing to promote; rolling it produces an empty section.
   const rest = text.slice(match.index + match[0].length)
-  const body = (/^## /m.exec(rest) ? rest.slice(0, /^## /m.exec(rest).index) : rest).trim()
+  const next = /^## /m.exec(rest)
+  const body = (next ? rest.slice(0, next.index) : rest).trim()
   if (!body) return null
   const released = `## [Unreleased]\n\n## [${version}] - ${date}`
   return text.slice(0, match.index) + released + text.slice(match.index + match[0].length)
@@ -929,8 +930,10 @@ if (flag('--sync')) {
     const projectRoot = resolve(target)
     const destination = join(projectRoot, 'scripts', basename(self))
     if (destination === self) continue
-    if (!existsSync(join(projectRoot, 'package.json'))) {
-      warn(`${target}: no package.json — skipped`)
+    // Any directory can hold a vendored copy: a manifest is only needed to wire up a
+    // script, which Rust, Python and Go projects do not have and do not need.
+    if (!existsSync(projectRoot)) {
+      warn(`${target}: no such directory — skipped`)
       continue
     }
     const current = existsSync(destination) ? readFileSync(destination, 'utf8') : null
@@ -943,9 +946,15 @@ if (flag('--sync')) {
       writeFileSync(destination, source)
     }
     ok(`${target}: ${current === null ? 'installed' : 'updated'}${dryRun ? ' (dry run)' : ''}`)
-    const scripts = readJson(join(projectRoot, 'package.json')).scripts ?? {}
-    if (!scripts.release) {
-      warn(`${target}: add "release": "node scripts/${basename(self)}" to package.json`)
+
+    const manifestPath = join(projectRoot, 'package.json')
+    if (existsSync(manifestPath)) {
+      const scripts = readJson(manifestPath).scripts ?? {}
+      if (!scripts.release) {
+        warn(`${target}: add "release": "node scripts/${basename(self)}" to package.json`)
+      }
+    } else {
+      note(`${target}: run it with \`node scripts/${basename(self)}\``)
     }
   }
   process.exit(0)
@@ -1294,8 +1303,24 @@ if (bumping && compareVersions(version, currentVersion) <= 0) {
 const dirty = tryRead('git', ['status', '--porcelain'])
 if (dirty === null) fail('could not read git status')
 else if (dirty && runs('commit')) {
-  ok(`working tree has ${dirty.split('\n').length} change(s) — will be committed first`)
+  const entries = dirty.split('\n')
+  ok(`working tree has ${entries.length} change(s) — will be committed first`)
   console.log(dim(indent(formatStatus(dirty))))
+  // One commit gets one subject. A change set spanning several top-level directories is
+  // usually several pieces of work, and no honest Conventional Commits subject covers it.
+  const areas = new Set(
+    entries.map(
+      (entry) => entry.trim().split(/\s+/).slice(1).join(' ').replaceAll('"', '').split('/')[0],
+    ),
+  )
+  if (areas.size > 2) {
+    warn(
+      `these span ${areas.size} top-level paths (${[...areas].slice(0, 4).join(', ')}${areas.size > 4 ? ', …' : ''}), ` +
+        'which is usually more than one piece of work.\n' +
+        '       One commit gets one subject: consider committing them yourself, then ' +
+        'releasing with --skip commit.',
+    )
+  }
 } else if (dirty) {
   fail(`working tree is not clean:\n${indent(formatStatus(dirty))}`)
 } else ok('working tree clean')
@@ -1548,6 +1573,29 @@ if (problems.length) {
 // CONFIRM
 // ─────────────────────────────────────────────────────────────────────────────
 
+/**
+ * Stage the working tree and draft its commit message before the confirmation prompt, so
+ * what gets approved is the message that will actually be written. Staging is the first
+ * mutation, and it is undone if the release is declined — `git add` touches only the index,
+ * never the working tree, so restoring it is exact.
+ */
+let commitMessage = null
+let didStage = false
+if (dirty && runs('commit') && !dryRun) {
+  step('Stage the working tree')
+  mutate('git', ['add', '--all'])
+  didStage = true
+  commitMessage = draftCommitMessage()
+  if (!commitMessage) {
+    mutate('git', ['reset', '--quiet'])
+    abort(
+      `${assistantName} could not draft a Conventional Commits message for these changes.\n\n` +
+        '  Commit them yourself and re-run, or run without --commit.',
+    )
+  }
+  console.log(indent(commitMessage))
+}
+
 if (!assumeYes && !dryRun && process.stdin.isTTY) {
   if (notes) console.log(`\n${bold('Release notes')}\n${indent(notes)}`)
   const rl = createInterface({ input: process.stdin, output: process.stdout })
@@ -1560,7 +1608,11 @@ if (!assumeYes && !dryRun && process.stdin.isTTY) {
   } finally {
     rl.close()
   }
-  if (!/^y(es)?$/i.test(answer.trim())) abort('cancelled')
+  if (!/^y(es)?$/i.test(answer.trim())) {
+    // Leave the index exactly as it was found.
+    if (didStage) mutate('git', ['reset', '--quiet'])
+    abort('cancelled')
+  }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -1571,18 +1623,8 @@ const staged = []
 
 if (dirty && runs('commit')) {
   step('Commit the working tree')
-  mutate('git', ['add', '--all'])
-  // Draft after staging: the message describes what is staged, not what happens to be
-  // in the tree. Under --dry-run nothing was staged, so there is nothing to describe.
-  const message = dryRun ? null : draftCommitMessage()
-  if (!message && !dryRun) {
-    abort(
-      `${assistantName} could not draft a Conventional Commits message for the staged changes.\n\n` +
-        '  Commit them yourself and re-run, or run without --commit.',
-    )
-  }
-  console.log(indent(message ?? '<drafted at run time>'))
-  mutate('git', ['commit', '-m', message ?? 'chore: working tree'])
+  if (dryRun) console.log(`  ${yellow('would run:')} git commit -m <drafted at run time>`)
+  else mutate('git', ['commit', '-m', commitMessage])
 
   // Now that the commit exists it is part of the release, so the notes can describe it.
   if (notesDeferred && !dryRun) {
