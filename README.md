@@ -327,6 +327,11 @@ Anything else runs as written with no preflight. The project name comes from the
 `name` in `package.json`, `Cargo.toml` or `pyproject.toml`, `module` in `go.mod` — falling
 back to the repository directory.
 
+`publish` is detected too, but only where one ecosystem obviously owns it: `package.json`
+gets `npm publish`, `Cargo.toml` gets `cargo publish`. Python has several publishers (uv,
+twine, poetry, flit) and Go has none, so those get nothing rather than a guess — publishing
+to the wrong registry is a far worse failure than being asked to configure it.
+
 With no `versionFile` configured it is detected from the repository — `package.json`,
 `pyproject.toml`, `Cargo.toml`, then `VERSION` — so most projects need no config for it at
 all. Set it explicitly to override, or to `null` for a repository that versions by tag.

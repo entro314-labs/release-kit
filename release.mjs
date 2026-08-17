@@ -62,7 +62,8 @@ import { createInterface } from 'node:readline/promises'
  *                            the repository when unset; null when it versions by tag alone
  *   versionFiles    array    further files whose version is kept in sync; each is a path
  *                            or { path, pattern }
- *   publish         string   publish command; null to skip publishing entirely
+ *   publish         string   publish command. Detected from the version source when unset,
+ *                            and only where it is unambiguous; null to publish nothing
  *   commitMessage   string   release commit subject
  *   releaseTitle    string   GitHub release title
  *   assets          string[] files attached to the GitHub release
@@ -104,7 +105,7 @@ const DEFAULTS = {
   changelog: 'CHANGELOG.md',
   versionFile: undefined,
   versionFiles: [],
-  publish: 'npm publish --tag %d',
+  publish: undefined,
   commitMessage: 'chore(release): %t',
   releaseTitle: '%t',
   assets: [],
@@ -1136,6 +1137,17 @@ function detectVersionFile() {
   return null
 }
 
+/**
+ * The publish command implied by a project's manifest, but only where one ecosystem
+ * obviously owns it. Python has several publishers (uv, twine, poetry, flit) and Go has
+ * none, so those get nothing rather than a guess — publishing to the wrong registry is a
+ * far worse failure than being asked to configure it.
+ */
+const PUBLISH_BY_MANIFEST = {
+  'package.json': 'npm publish --tag %d',
+  'Cargo.toml': 'cargo publish',
+}
+
 // An explicit `versionFile: null` means "versions by tag" and must not be re-detected, so
 // the distinction is between the key being absent and the key being set to null.
 const configuredVersionFile = Object.hasOwn(userConfig, 'versionFile')
@@ -1169,6 +1181,15 @@ const goModule = existsSync('go.mod')
   : null
 const projectName =
   manifest?.name ?? (versionFile ? readNameFrom(versionFile) : null) ?? goModule ?? basename(root)
+
+// Same rule as versionFile: an explicit `publish: null` means "publish nothing" and is
+// never re-detected. Unset means "work it out", and working it out can yield nothing.
+if (!Object.hasOwn(userConfig, 'publish')) {
+  // Preflight already reports "no publish command configured" when the step runs, so
+  // there is nothing to say here — and `runs` is not resolved this early.
+  config.publish =
+    (versionFile ? PUBLISH_BY_MANIFEST[basename(versionFile.path)] : undefined) ?? null
+}
 
 // Validate every name that was asked for, not just the ones that survive: a typo in
 // --skip would otherwise delete nothing and silently run the step you meant to drop.
