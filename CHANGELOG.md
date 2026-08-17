@@ -2,6 +2,13 @@
 
 All notable changes to @entro314labs/release-kit.
 
+## [2.1.0] - 2026-08-17
+
+### Added
+
+- Publish preflight checks now support bun, uv, and Go projects alongside npm and pnpm. Authentication and already-published checks are run with the tool that does the publishing: uv uses token-based authentication from the environment and skips duplicate versions itself, and for Go the release tag is checked via `go list`. The project name can now also be read from `go.mod`.
+- The release version can be sourced from any file, not just `package.json`: `versionFile` points at wherever a project keeps its version, with the format inferred from the file name and a pattern option for anything else. `versionFiles` accepts the same entries to keep several files in sync, and `versionFile: null` supports repositories versioned by tag alone.
+
 ## [2.0.0] - 2026-08-17
 
 ### Added
