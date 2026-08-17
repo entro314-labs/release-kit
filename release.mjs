@@ -17,15 +17,14 @@
  *   release-kit --dry-run                     print every step, execute nothing
  *   release-kit --help                        full flag list
  *
- * Two properties matter more than the feature list:
+ * Two properties shape the design:
  *
- *  - Preflight accumulates. Every check runs, every failure is reported, then it aborts
- *    once. You fix all of it in one pass instead of rediscovering the next problem after
- *    each retry.
- *  - Every step is idempotent. A run that dies halfway (publish 2FA timeout, flaky
- *    network) can be re-run: an already-written version, an existing tag at HEAD, an
- *    already-published version and an existing release are each detected and skipped.
- *    There is no cleanup step and no --resume flag to remember.
+ *  - Preflight accumulates. Every check runs and every failure is reported before it
+ *    aborts once with the whole list, rather than stopping at the first problem.
+ *  - Every step is idempotent. A run interrupted partway through (a publish timeout, a
+ *    network failure) can be re-run: an already-written version, an existing tag at HEAD,
+ *    an already-published version and an existing release are each detected and skipped.
+ *    There is no cleanup step and no --resume flag.
  *
  * Configuration is optional. Defaults are the conventions (package.json version,
  * CHANGELOG.md, main branch, `v` tag prefix, npm publish); a release.config.json beside
@@ -135,7 +134,7 @@ const indent = (text) =>
 /**
  * Re-pad `git status --porcelain` entries so the two-column status code lines up. The
  * raw output is trimmed on capture, which strips the leading space off the first entry
- * only — ` M file` becomes `M file` while the rest keep theirs, and the column bends.
+ * only — ` M file` becomes `M file` while the rest keep theirs, misaligning the column.
  */
 const formatStatus = (porcelain) =>
   porcelain
@@ -576,7 +575,7 @@ const isTrustedPublishing =
 console.log(`  ${dim(`${pkg.version} → ${version}   tag ${tag}   dist-tag ${distTag}`)}`)
 
 // ─────────────────────────────────────────────────────────────────────────────
-// PREFLIGHT — every check runs, then we abort once with all of the failures
+// PREFLIGHT — every check runs, then it aborts once with all of the failures
 // ─────────────────────────────────────────────────────────────────────────────
 
 step('Preflight')
@@ -665,10 +664,10 @@ if (!publishCommand) {
     const user = tryRead(registryCli, ['whoami'])
     if (user === null) {
       // npm replaced long-lived tokens with two-hour sessions in December 2025, so the
-      // usual cause is an expired login rather than never having logged in at all.
+      // usual cause is an expired session rather than a missing login.
       fail(
         `${registryCli} is not authenticated — run \`${registryCli} login\`. ` +
-          'npm logins are two-hour sessions now, so one from an earlier sitting has expired.',
+          'npm logins are two-hour sessions, so an earlier one may have expired.',
       )
     } else ok(`${registryCli} authenticated (${user || 'unknown user'})`)
   }

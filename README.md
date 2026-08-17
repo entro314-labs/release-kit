@@ -75,9 +75,8 @@ already says — which is the mode to use when a version bump landed in an earli
 | `2.5.0`                              | `2.5.0`                                          | `2.5.0`             |
 
 A `major`/`minor`/`patch` bump off a prerelease releases that prerelease's base version
-when the base already satisfies the bump. That is what makes "promote the release
-candidate" a plain `patch`, and it matches `semver.inc` exactly — the arithmetic is
-differential-tested against the real `semver` package.
+when the base already satisfies the bump, so promoting a release candidate is a plain
+`patch`. The arithmetic matches `semver.inc` exactly.
 
 Prerelease bumps need `--preid` unless the current version already carries one to infer.
 
@@ -137,14 +136,14 @@ The dist-tag is derived from the version, never guessed:
 | `3.0.0-1751023456789`  | `canary` (an all-numeric prerelease is a timestamp)           |
 | `1.2.3-experimental.0` | **refuses to release**                                        |
 
-That last row is deliberate. An unrecognised prerelease identifier has no safe home, and
+The refusal is deliberate: an unrecognised prerelease identifier has no safe channel, and
 falling through to `latest` would put a prerelease on the stable line where every
-`npm install` picks it up. Pass `--tag <dist-tag>` to choose one explicitly.
+`npm install` picks it up. Pass `--tag <dist-tag>` to choose a channel explicitly.
 
 ## Preflight
 
-Every check runs, every failure is reported, then it aborts once with the whole list. You
-fix all of it in one pass instead of rediscovering the next problem on each retry.
+Every check runs and every failure is reported before it aborts once with the whole list,
+rather than stopping at the first problem.
 
 - The target version is greater than the current one
 - Working tree is clean
@@ -215,7 +214,7 @@ The registry preflight (`whoami`, the already-published lookup) runs with whiche
 pipeline — is run as written with no registry preflight, because there is nothing reliable
 to introspect.
 
-Two npm behaviours worth knowing, both of which this handles:
+Two npm behaviours are handled automatically:
 
 - **`npm login` issues a two-hour session**, not a durable token. Classic tokens were
   permanently revoked in December 2025. A login from earlier in the day has expired, and
@@ -279,24 +278,11 @@ including a directory that is not a repository.
 - Whatever the `publish` command needs — for the default, a live `npm login` session
   (two hours) or an OIDC trusted-publishing environment
 
-## Releasing release-kit
+## Contributing
 
-It releases itself. From a clone of this repository:
+The tool releases itself, so a change ships the same way it would in any consuming project:
+add a `## [Unreleased]` entry to `CHANGELOG.md`, then run `pnpm release <bump>` from a clone.
 
-```sh
-pnpm release minor
-```
+## License
 
-## Provenance
-
-Assembled by reading a pile of hand-rolled release scripts from other projects and taking
-the part each one got right:
-
-| Source            | Idea                                                                               |
-| ----------------- | ---------------------------------------------------------------------------------- |
-| Aiden             | Preflight accumulator; `would run:` dry-run; `git push --follow-tags`              |
-| Tamagui           | dist-tag resolution that refuses unknown prerelease identifiers; idempotent re-run |
-| SlickGrid         | Prerelease detection driving the GitHub release flag                               |
-| Abject            | Release notes as the tag annotation, for CI to reuse                               |
-| pi-mono           | `[Unreleased]` → `[x.y.z] - date`, then reopen `[Unreleased]`                      |
-| create-release.ts | `--notes-file -` over stdin: no temp file, nothing to escape                       |
+MIT
