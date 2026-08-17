@@ -1,0 +1,54 @@
+{
+  "name": "@entro314-labs/release-kit",
+  "version": "1.0.0",
+  "description": "Single-file, zero-dependency release mechanism for JS/TS/Node projects: version bump, changelog roll, commit, annotated tag, push, publish, GitHub release",
+  "keywords": [
+    "changelog",
+    "cli",
+    "github-release",
+    "npm-publish",
+    "release",
+    "release-automation",
+    "semver",
+    "tag",
+    "versioning",
+    "zero-dependency"
+  ],
+  "homepage": "https://github.com/entro314-labs/release-kit#readme",
+  "bugs": {
+    "url": "https://github.com/entro314-labs/release-kit/issues"
+  },
+  "license": "MIT",
+  "author": "Dominikos Pritis <idominikos@outlook.com>",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/entro314-labs/release-kit.git"
+  },
+  "bin": {
+    "release-kit": "release.mjs"
+  },
+  "files": [
+    "release.mjs",
+    "README.md",
+    "LICENSE"
+  ],
+  "type": "module",
+  "publishConfig": {
+    "access": "public"
+  },
+  "scripts": {
+    "format": "oxfmt --write .",
+    "format:check": "oxfmt --check .",
+    "lint": "oxlint .",
+    "lint:ci": "oxlint --deny-warnings .",
+    "check": "pnpm run format:check && pnpm run lint:ci",
+    "release": "node release.mjs"
+  },
+  "devDependencies": {
+    "oxfmt": "^0.63.0",
+    "oxlint": "^1.78.0"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}

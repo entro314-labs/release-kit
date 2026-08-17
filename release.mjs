@@ -1,18 +1,21 @@
 #!/usr/bin/env node
 /**
- * release.mjs — one atomic release for any JS/TS/Node project.
+ * Drop-in atomic release for any JS/TS/Node project.
  *
- * Drop this single file into `scripts/`, add `"release": "node scripts/release.mjs"` to
- * package.json, and you have: version bump → changelog roll → commit → annotated tag →
- * push → registry publish → GitHub release. It has no dependencies beyond `node:*`, so
- * there is nothing to install and nothing to keep in sync but the file itself.
+ * Version bump → changelog roll → commit → annotated tag → push → registry publish →
+ * GitHub release. It imports nothing but `node:*`, which is why the same file works
+ * installed as a package, run through `npx`, or vendored into a project's `scripts/`.
  *
- *   node scripts/release.mjs                  release the version already in package.json
- *   node scripts/release.mjs 2.3.0            release an explicit version
- *   node scripts/release.mjs minor            bump from the current version
- *   node scripts/release.mjs prerelease --preid beta
- *   node scripts/release.mjs --dry-run        print every step, execute nothing
- *   node scripts/release.mjs --help           full flag list
+ *   pnpm add -D @entro314-labs/release-kit    then "release": "release-kit"
+ *   npx @entro314-labs/release-kit            no install
+ *   npx @entro314-labs/release-kit --sync .   vendor it as scripts/release.mjs
+ *
+ *   release-kit                               release the version already in package.json
+ *   release-kit 2.3.0                         release an explicit version
+ *   release-kit minor                         bump from the current version
+ *   release-kit prerelease --preid beta
+ *   release-kit --dry-run                     print every step, execute nothing
+ *   release-kit --help                        full flag list
  *
  * Two properties matter more than the feature list:
  *
@@ -31,7 +34,7 @@
 
 import { execFileSync, execSync } from 'node:child_process'
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
-import { basename, join, resolve } from 'node:path'
+import { basename, join, relative, resolve, sep } from 'node:path'
 import { createInterface } from 'node:readline/promises'
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -73,10 +76,18 @@ const DEFAULTS = {
  */
 const KNOWN_CHANNELS = new Set(['alpha', 'beta', 'canary', 'next', 'nightly', 'rc'])
 
-const USAGE = `
-release.mjs — tag, publish, and release a JS/TS/Node project.
+/**
+ * How this script was invoked, so --help prints a command that actually works: the bin
+ * name when it is installed as a package, `node <path>` when it is vendored as a file.
+ */
+const INVOCATION = process.argv[1]?.includes(`${sep}node_modules${sep}`)
+  ? 'release-kit'
+  : `node ${relative(process.cwd(), process.argv[1] ?? 'release.mjs') || 'release.mjs'}`
 
-  node scripts/release.mjs [<version>|<bump>] [flags]
+const USAGE = `
+release-kit — tag, publish, and release a JS/TS/Node project.
+
+  ${INVOCATION} [<version>|<bump>] [flags]
 
 Target (optional; defaults to the version already in package.json):
   <x.y.z>              release this exact version
@@ -119,6 +130,21 @@ const indent = (text) =>
   text
     .split('\n')
     .map((line) => `       ${line}`)
+    .join('\n')
+
+/**
+ * Re-pad `git status --porcelain` entries so the two-column status code lines up. The
+ * raw output is trimmed on capture, which strips the leading space off the first entry
+ * only — ` M file` becomes `M file` while the rest keep theirs, and the column bends.
+ */
+const formatStatus = (porcelain) =>
+  porcelain
+    .split('\n')
+    .map((line) => {
+      const entry = line.trim()
+      const gap = entry.indexOf(' ')
+      return gap === -1 ? entry : `${entry.slice(0, gap).padEnd(2)} ${entry.slice(gap + 1)}`
+    })
     .join('\n')
 
 function abort(message) {
@@ -502,7 +528,28 @@ const shellQuote = (value) => `'${value.replaceAll("'", `'\\''`)}'`
 const expandShell = (template) => expandWith(template, shellQuote)
 
 const publishCommand = config.publish && !skipPublish ? expandShell(config.publish) : null
-const publishesToNpm = !!publishCommand && /^npm\s/.test(publishCommand)
+
+/**
+ * npm and pnpm answer `whoami` and `view` identically and share `~/.npmrc`, so whichever
+ * one publishes can also run the registry preflight. Checking with the wrong one mislabels
+ * the result. A publish command driving anything else (vsce, a shell pipeline) is left
+ * alone — it cannot be introspected, and guessing would invent failures.
+ */
+const REGISTRY_CLIS = new Set(['npm', 'pnpm'])
+const publishCli = publishCommand?.trim().split(/\s+/)[0]
+const registryCli = REGISTRY_CLIS.has(publishCli) ? publishCli : null
+
+/**
+ * CI publishing over OIDC ("trusted publishing") carries no token at all: `whoami` fails
+ * while `publish` succeeds. Demanding a login there would abort a perfectly valid release.
+ * GitHub Actions exposes the OIDC request variables; GitLab CI and CircleCI set
+ * NPM_ID_TOKEN. See https://docs.npmjs.com/trusted-publishers
+ */
+const isTrustedPublishing =
+  (process.env.GITHUB_ACTIONS === 'true' &&
+    !!process.env.ACTIONS_ID_TOKEN_REQUEST_URL &&
+    !!process.env.ACTIONS_ID_TOKEN_REQUEST_TOKEN) ||
+  !!process.env.NPM_ID_TOKEN
 
 console.log(`  ${dim(`${pkg.version} → ${version}   tag ${tag}   dist-tag ${distTag}`)}`)
 
@@ -528,7 +575,7 @@ if (bumping && compareVersions(version, pkg.version) <= 0) {
 
 const dirty = tryRead('git', ['status', '--porcelain'])
 if (dirty === null) fail('could not read git status')
-else if (dirty) fail(`working tree is not clean:\n${indent(dirty)}`)
+else if (dirty) fail(`working tree is not clean:\n${indent(formatStatus(dirty))}`)
 else ok('working tree clean')
 
 const branch = tryRead('git', ['rev-parse', '--abbrev-ref', 'HEAD'])
@@ -587,13 +634,23 @@ if (!publishCommand) {
   note(skipPublish ? 'publish skipped (--skip-publish)' : 'publish disabled in config')
 } else if (pkg.private) {
   fail('package.json is private but a publish command is configured')
-} else if (!publishesToNpm) {
+} else if (!registryCli) {
   ok(`publish: ${publishCommand}`)
 } else {
-  const npmUser = tryRead('npm', ['whoami'])
-  if (npmUser === null) fail('npm is not authenticated — run `npm login`')
-  else ok(`npm authenticated (${npmUser || 'unknown user'})`)
-  alreadyPublished = succeeds('npm', ['view', `${pkg.name}@${version}`, 'version'])
+  if (isTrustedPublishing) {
+    ok('trusted publishing (OIDC) — no token needed')
+  } else {
+    const user = tryRead(registryCli, ['whoami'])
+    if (user === null) {
+      // npm replaced long-lived tokens with two-hour sessions in December 2025, so the
+      // usual cause is an expired login rather than never having logged in at all.
+      fail(
+        `${registryCli} is not authenticated — run \`${registryCli} login\`. ` +
+          'npm logins are two-hour sessions now, so one from an earlier sitting has expired.',
+      )
+    } else ok(`${registryCli} authenticated (${user || 'unknown user'})`)
+  }
+  alreadyPublished = succeeds(registryCli, ['view', `${pkg.name}@${version}`, 'version'])
   if (alreadyPublished) {
     note(`${pkg.name}@${version} is already on the registry — will skip publishing`)
   }
