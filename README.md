@@ -313,6 +313,56 @@ A project releasing off a non-default branch with a different tag scheme:
 }
 ```
 
+## 🤖 Assistant (optional)
+
+An assistant is an AI CLI already installed on your machine. When one is configured,
+release-kit can write the Conventional Commits message for a dirty working tree and draft
+release notes from the commit log. It is **off by default**, and every failure — not
+installed, not authenticated, timed out, unusable answer — falls back to the behaviour you
+already have. A release is never blocked because a text generator was unavailable.
+
+```sh
+pnpm release minor --commit --assistant claude --model sonnet --effort low
+```
+
+| Tool     | Invocation   | Model     | Effort                       |
+| -------- | ------------ | --------- | ---------------------------- |
+| `claude` | `claude -p`  | `--model` | `--effort` (low … max)       |
+| `codex`  | `codex exec` | `-m`      | `-c model_reasoning_effort=` |
+
+Configure it once instead:
+
+```json
+{
+  "assistant": { "tool": "claude", "model": "sonnet", "effort": "low" }
+}
+```
+
+`"assistant": "auto"` picks the first tool found on PATH; `"claude"` is shorthand for
+`{ "tool": "claude" }`. Naming a tool that is not installed is an error rather than a silent
+downgrade, so a configured pipeline fails loudly; `"auto"` degrades quietly by design.
+
+### What it does
+
+- **`--commit`** stages the working tree, drafts a Conventional Commits message for the
+  staged diff, and commits — instead of refusing to release. The subject is validated
+  against the Conventional Commits grammar; an answer that does not parse is rejected rather
+  than committed. Attribution lines (`Co-Authored-By`, `Generated with`) are stripped, so
+  the tool never signs your commits.
+- **Release notes** are drafted from the commits since the last tag when `CHANGELOG.md` has
+  no section for the version. They are written into the changelog, used as the tag
+  annotation, and posted as the GitHub release body — the same "written once, lands in three
+  places" path a hand-written section takes.
+
+With `--commit`, notes are drafted _after_ that commit lands, so they describe the change it
+just made. Merge, release, `WIP` and `fixup!`/`squash!` commits are excluded from the prompt.
+
+### Adding another tool
+
+One row in `ASSISTANTS` in `release.mjs`: the command, the args that make it read a prompt on
+stdin, and how it spells model and effort. Tools whose stdout carries session scaffolding
+declare `outputFile` and the answer is read from there instead.
+
 ## 🔄 Keeping vendored copies in sync
 
 Installed as a dependency, updates come from your package manager and there is nothing to

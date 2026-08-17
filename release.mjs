@@ -32,7 +32,8 @@
  */
 
 import { execFileSync, execSync } from 'node:child_process'
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
 import { basename, join, relative, resolve, sep } from 'node:path'
 import { createInterface } from 'node:readline/promises'
 
@@ -55,6 +56,10 @@ import { createInterface } from 'node:readline/promises'
  *   commitMessage   string   release commit subject
  *   releaseTitle    string   GitHub release title
  *   assets          string[] files attached to the GitHub release
+ *   assistant       string|object  drafting CLI for commit messages and notes. A key of
+ *                            ASSISTANTS, "auto" for the first available, or null. The
+ *                            object form { tool, model, effort } also pins which model and
+ *                            reasoning effort that CLI is invoked with.
  */
 const DEFAULTS = {
   tagPrefix: 'v',
@@ -66,6 +71,7 @@ const DEFAULTS = {
   commitMessage: 'chore(release): %t',
   releaseTitle: '%t',
   assets: [],
+  assistant: null,
 }
 
 /**
@@ -101,6 +107,11 @@ Flags:
   --yes, -y            skip the confirmation prompt
   --skip-publish       do not publish to the registry
   --skip-release       do not create the GitHub release
+  --commit             commit a dirty working tree with a drafted Conventional Commits
+                       message instead of refusing to release
+  --assistant <name>   drafting CLI to use: auto, none, claude, codex
+  --model <name>       model for the assistant (e.g. sonnet, opus)
+  --effort <level>     reasoning effort for the assistant (low … max)
   --sync <dir>...      copy this script into other projects' scripts/ and exit
   --help, -h           show this
 
@@ -191,6 +202,203 @@ function tryRead(command, args) {
  * succeed while printing nothing, and "no output" must not read as "failed".
  */
 const succeeds = (command, args) => tryRead(command, args) !== null
+
+// ─────────────────────────────────────────────────────────────────────────────
+// ASSISTANTS — optional CLIs that draft prose (commit messages, release notes)
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Drafting tools, tried in this order when `assistant` is "auto". Each is a CLI that
+ * reads a prompt on stdin and writes plain text to stdout. Supporting another harness is
+ * one row here; nothing else in the file names a specific tool.
+ */
+const ASSISTANTS = {
+  claude: {
+    command: 'claude',
+    args: ['-p'],
+    probe: ['--version'],
+    model: (m) => ['--model', m],
+    effort: (e) => ['--effort', e],
+  },
+  codex: {
+    command: 'codex',
+    args: ['exec', '--skip-git-repo-check', '--sandbox', 'read-only'],
+    probe: ['--version'],
+    model: (m) => ['-m', m],
+    effort: (e) => ['-c', `model_reasoning_effort="${e}"`],
+    // `codex exec` streams session scaffolding (MCP notices, hook logs) to stdout, so the
+    // answer is only clean when written to a file with --output-last-message.
+    outputFile: (path) => ['--output-last-message', path],
+  },
+}
+
+/** How long a draft may take before the release gives up and falls back. */
+const DRAFT_TIMEOUT_MS = 180_000
+
+/**
+ * Lines a drafting tool may append that must never reach a commit message or release
+ * notes: attribution for the tool itself, and the markdown fences models wrap output in.
+ */
+function cleanDraft(text) {
+  return text
+    .replace(/^\s*```[a-z]*\s*\n?/i, '')
+    .replace(/\n?```\s*$/, '')
+    .split('\n')
+    .filter(
+      (line) =>
+        !/^\s*co-authored-by:/i.test(line) &&
+        !/^\s*(🤖\s*)?generated with/i.test(line) &&
+        !/^\s*signed-off-by:\s*claude/i.test(line),
+    )
+    .join('\n')
+    .trim()
+}
+
+/**
+ * Release notes carry two artefacts a commit message does not: stray code fences around
+ * part of the output, and a trailing paragraph explaining the model's reasoning. Keep the
+ * document only up to its last heading or list item; prose after that is commentary.
+ */
+function cleanNotes(text) {
+  const lines = cleanDraft(text)
+    .split('\n')
+    .filter((line) => !/^\s*```/.test(line))
+  let end = lines.length
+  while (end > 0) {
+    const line = lines[end - 1]
+    if (!line.trim()) {
+      end -= 1
+      continue
+    }
+    // A heading, a bullet, or an indented continuation of a bullet: the document proper.
+    if (/^\s*[-*+] /.test(line) || /^#{1,6} /.test(line) || /^\s+\S/.test(line)) break
+    end -= 1
+  }
+  return lines.slice(0, end).join('\n').trim() || null
+}
+
+/**
+ * Run the selected assistant against a prompt.
+ *
+ * Every failure mode — not installed, not authenticated, timed out, empty answer — returns
+ * null rather than throwing. Drafting is a convenience; a release must never be blocked
+ * because a text generator was unavailable.
+ *
+ * @returns {string | null} the cleaned draft, or null when unavailable
+ */
+function runAssistant(prompt) {
+  if (!assistant) return null
+
+  const args = [...assistant.args]
+  if (assistantModel && assistant.model) args.push(...assistant.model(assistantModel))
+  if (assistantEffort && assistant.effort) args.push(...assistant.effort(assistantEffort))
+
+  // Tools whose stdout carries session scaffolding hand back the answer through a file.
+  const answerFile = assistant.outputFile
+    ? join(mkdtempSync(join(tmpdir(), 'release-kit-')), 'answer.md')
+    : null
+  if (answerFile) args.push(...assistant.outputFile(answerFile))
+
+  try {
+    const stdout = execFileSync(assistant.command, args, {
+      input: prompt,
+      encoding: 'utf8',
+      timeout: DRAFT_TIMEOUT_MS,
+      stdio: ['pipe', 'pipe', 'ignore'],
+      maxBuffer: 10 * 1024 * 1024,
+    })
+    const answer = answerFile
+      ? existsSync(answerFile)
+        ? readFileSync(answerFile, 'utf8')
+        : ''
+      : stdout
+    return cleanDraft(answer) || null
+  } catch {
+    return null
+  }
+}
+
+/** Commit subjects since the last tag, with release and merge commits filtered out. */
+function commitsSinceLastTag() {
+  const lastTag = tryRead('git', ['describe', '--tags', '--abbrev=0'])
+  const range = lastTag ? `${lastTag}..HEAD` : 'HEAD'
+  const log = tryRead('git', ['log', '--format=%s', range]) ?? ''
+  return {
+    lastTag,
+    subjects: log
+      .split('\n')
+      .filter(
+        (s) =>
+          s && !/^chore\(release\)/i.test(s) && !/^Merge (branch|pull request|remote)/i.test(s),
+      ),
+  }
+}
+
+const CONVENTIONAL_TYPES = 'build|chore|ci|docs|feat|fix|perf|refactor|revert|style|test'
+const CONVENTIONAL_RE = new RegExp(`^(${CONVENTIONAL_TYPES})(\\([^)]+\\))?!?: .+`)
+
+/**
+ * Draft a Conventional Commits message for the staged changes.
+ *
+ * @returns {string | null} a message whose subject is valid Conventional Commits, or null
+ */
+function draftCommitMessage() {
+  const stat = tryRead('git', ['diff', '--cached', '--stat'])
+  // Cap the diff: a large one wastes the context window and rarely improves the subject.
+  const diff = tryRead('git', ['diff', '--cached', '--unified=1'])?.slice(0, 12_000)
+  if (!stat) return null
+
+  const prompt = [
+    'Write a Conventional Commits message for these staged changes.',
+    '',
+    'Rules:',
+    `- Subject: "<type>(<optional scope>): <description>" where type is one of ${CONVENTIONAL_TYPES.split('|').join(', ')}.`,
+    '- Subject in the imperative mood, no trailing period, under 72 characters.',
+    '- Add a body only if the change needs explanation; separate it with a blank line.',
+    '- Output the raw commit message and nothing else: no markdown fences, no preamble.',
+    '- Do NOT add Co-Authored-By, Signed-off-by, or any attribution or tool credit.',
+    '',
+    'Files changed:',
+    stat,
+    '',
+    'Diff:',
+    diff ?? '(unavailable)',
+  ].join('\n')
+
+  const message = runAssistant(prompt)
+  if (!message) return null
+  const [subject] = message.split('\n')
+  return CONVENTIONAL_RE.test(subject) ? message : null
+}
+
+/**
+ * Draft release notes from the commits since the last tag, in the changelog's own style.
+ *
+ * @returns {string | null} markdown body (no version heading), or null
+ */
+function draftReleaseNotes(version, subjects, lastTag) {
+  if (!subjects.length) return null
+
+  const prompt = [
+    `Write release notes for version ${version}.`,
+    '',
+    'Rules:',
+    '- Group the changes under Keep a Changelog headings (`### Added`, `### Changed`,',
+    '  `### Fixed`, `### Removed`), including only the headings that apply.',
+    '- One bullet per user-visible change. Merge related commits into a single bullet.',
+    '- Omit internal chores: CI, linting, formatting, dependency bumps, version bumps.',
+    '- Write for someone upgrading: say what changed for them, not which files moved.',
+    '- Plain, factual language. No hype, no emoji, no concluding summary.',
+    '- Output only the markdown body: no version heading, no code fences, no attribution.',
+    '- Do NOT explain your reasoning or add any commentary before or after the notes.',
+    '',
+    `Commit subjects since ${lastTag ?? 'the start of the project'}:`,
+    ...subjects.map((s) => `- ${s}`),
+  ].join('\n')
+
+  const drafted = runAssistant(prompt)
+  return drafted ? cleanNotes(drafted) : null
+}
 
 /** One-line rendering of an argv, so a multi-line arg (release notes) stays readable. */
 const formatCommand = (command, args) =>
@@ -392,6 +600,17 @@ function rollUnreleased(text, version, date) {
   return text.slice(0, match.index) + released + text.slice(match.index + match[0].length)
 }
 
+/**
+ * Insert a section for a version above the newest existing one, so drafted notes are kept
+ * in the changelog rather than only reaching the tag and the GitHub release.
+ */
+function insertChangelogSection(text, version, date, body) {
+  const entry = `## [${version}] - ${date}\n\n${body}\n`
+  const firstSection = /^## /m.exec(text)
+  if (!firstSection) return `${text.trimEnd()}\n\n${entry}`
+  return `${text.slice(0, firstSection.index)}${entry}\n${text.slice(firstSection.index)}`
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // JSON FILES
 // ─────────────────────────────────────────────────────────────────────────────
@@ -433,6 +652,10 @@ const skipPublish = flag('--skip-publish')
 const skipRelease = flag('--skip-release')
 const explicitDistTag = option('--tag')
 const requestedPreid = option('--preid')
+const autoCommit = flag('--commit')
+const requestedAssistant = option('--assistant')
+const requestedModel = option('--model')
+const requestedEffort = option('--effort')
 
 if (flag('--help') || flag('-h')) {
   console.log(USAGE)
@@ -508,6 +731,41 @@ const config = {
 }
 const unknownKeys = Object.keys(config).filter((key) => !(key in DEFAULTS))
 if (unknownKeys.length) abort(`release.config.json has unknown keys: ${unknownKeys.join(', ')}`)
+
+/**
+ * The drafting tool, resolved from --assistant then config. "auto" picks the first one
+ * present on PATH; a named tool must be known and installed, otherwise it is an error
+ * rather than a silent downgrade to no drafting.
+ */
+const assistantConfig =
+  config.assistant && typeof config.assistant === 'object' ? config.assistant : {}
+const assistantChoice =
+  requestedAssistant ??
+  (typeof config.assistant === 'string' ? config.assistant : assistantConfig.tool) ??
+  'none'
+const assistantModel = requestedModel ?? assistantConfig.model ?? null
+const assistantEffort = requestedEffort ?? assistantConfig.effort ?? null
+let assistantName = null
+if (assistantChoice !== 'none' && assistantChoice !== null) {
+  const candidates =
+    assistantChoice === 'auto'
+      ? Object.keys(ASSISTANTS)
+      : [assistantChoice].filter((name) => {
+          if (name in ASSISTANTS) return true
+          abort(
+            `unknown assistant "${name}" (known: ${Object.keys(ASSISTANTS).join(', ')}, auto, none)`,
+          )
+          return false
+        })
+  assistantName =
+    candidates.find((name) => succeeds(ASSISTANTS[name].command, ASSISTANTS[name].probe)) ?? null
+  if (!assistantName && assistantChoice !== 'auto') {
+    abort(
+      `assistant "${assistantChoice}" is configured but \`${ASSISTANTS[assistantChoice].command}\` is not on PATH`,
+    )
+  }
+}
+const assistant = assistantName ? ASSISTANTS[assistantName] : null
 
 // ─────────────────────────────────────────────────────────────────────────────
 // RESOLVE THE TARGET VERSION
@@ -611,8 +869,31 @@ if (bumping && compareVersions(version, pkg.version) <= 0) {
 
 const dirty = tryRead('git', ['status', '--porcelain'])
 if (dirty === null) fail('could not read git status')
-else if (dirty) fail(`working tree is not clean:\n${indent(formatStatus(dirty))}`)
-else ok('working tree clean')
+else if (dirty && autoCommit) {
+  ok(`working tree has ${dirty.split('\n').length} change(s) — will be committed first`)
+  console.log(dim(indent(formatStatus(dirty))))
+} else if (dirty) {
+  fail(`working tree is not clean:\n${indent(formatStatus(dirty))}`)
+} else ok('working tree clean')
+
+if (autoCommit && !assistant) {
+  fail(
+    '--commit needs a drafting assistant to write the message. Configure one with ' +
+      '`--assistant auto`, or set "assistant" in release.config.json.',
+  )
+} else if (assistant) {
+  const detail = [
+    assistantModel && `model ${assistantModel}`,
+    assistantEffort && `effort ${assistantEffort}`,
+  ]
+    .filter(Boolean)
+    .join(', ')
+  ok(`assistant: ${assistantName}${detail ? ` (${detail})` : ''}`)
+  if (assistantModel && !assistant.model)
+    warn(`${assistantName} takes no model flag — --model ignored`)
+  if (assistantEffort && !assistant.effort)
+    warn(`${assistantName} takes no effort flag — --effort ignored`)
+}
 
 const branch = tryRead('git', ['rev-parse', '--abbrev-ref', 'HEAD'])
 if (!branch) fail('could not read the current branch')
@@ -692,9 +973,25 @@ if (!publishCommand) {
   }
 }
 
-// Notes: the changelog section for this version, else GitHub generates them from commits.
+// Notes: the changelog section for this version, else a draft, else GitHub generates them.
 let notes = null
 let rolledChangelog = null
+let draftedNotes = null
+
+/**
+ * True when --commit still has to create a commit. Notes drafted before that commit would
+ * describe an incomplete release, so drafting waits until the working tree is committed.
+ */
+const notesDeferred = !!(dirty && autoCommit && assistant)
+
+/** Draft notes from the commit log, reporting what it is doing since it takes a moment. */
+function draftNotesFor(v) {
+  if (!assistant) return null
+  const { lastTag, subjects } = commitsSinceLastTag()
+  if (!subjects.length) return null
+  note(`drafting notes from ${subjects.length} commit(s) with ${assistantName}...`)
+  return draftReleaseNotes(v, subjects, lastTag)
+}
 if (config.changelog && existsSync(config.changelog)) {
   const text = readFileSync(config.changelog, 'utf8')
   notes = changelogSection(text, version)
@@ -706,13 +1003,26 @@ if (config.changelog && existsSync(config.changelog)) {
       notes = changelogSection(rolledChangelog, version)
       ok(`${config.changelog}: [Unreleased] will become [${version}]`)
     } else {
-      warn(
-        `${config.changelog} has no ${version} or [Unreleased] section — GitHub will generate the notes`,
-      )
+      draftedNotes = notesDeferred ? null : draftNotesFor(version)
+      if (notesDeferred) {
+        ok(`${config.changelog}: a ${version} section will be drafted after the commit`)
+      } else if (draftedNotes) {
+        notes = draftedNotes
+        ok(`${config.changelog}: a ${version} section will be drafted by ${assistantName}`)
+      } else {
+        warn(
+          `${config.changelog} has no ${version} or [Unreleased] section — GitHub will generate the notes`,
+        )
+      }
     }
   }
-} else if (config.changelog) {
-  note(`no ${config.changelog} — GitHub will generate the notes`)
+} else {
+  // No changelog file at all: there is nothing to roll, but notes can still be drafted for
+  // the tag annotation and the GitHub release.
+  notes = notesDeferred ? null : draftNotesFor(version)
+  if (notesDeferred) ok('release notes will be drafted after the commit')
+  else if (notes) ok(`release notes drafted by ${assistantName}`)
+  else if (config.changelog) note(`no ${config.changelog} — GitHub will generate the notes`)
 }
 
 for (const asset of config.assets) {
@@ -753,6 +1063,28 @@ if (!assumeYes && !dryRun && process.stdin.isTTY) {
 
 const staged = []
 
+if (dirty && autoCommit) {
+  step('Commit the working tree')
+  mutate('git', ['add', '--all'])
+  // Draft after staging: the message describes what is staged, not what happens to be
+  // in the tree. Under --dry-run nothing was staged, so there is nothing to describe.
+  const message = dryRun ? null : draftCommitMessage()
+  if (!message && !dryRun) {
+    abort(
+      `${assistantName} could not draft a Conventional Commits message for the staged changes.\n\n` +
+        '  Commit them yourself and re-run, or run without --commit.',
+    )
+  }
+  console.log(indent(message ?? '<drafted at run time>'))
+  mutate('git', ['commit', '-m', message ?? 'chore: working tree'])
+
+  // Now that the commit exists it is part of the release, so the notes can describe it.
+  if (notesDeferred && !dryRun) {
+    draftedNotes = draftNotesFor(version)
+    if (draftedNotes) notes = draftedNotes
+  }
+}
+
 if (bumping) {
   step(`Write version ${version}`)
   for (const file of ['package.json', ...config.versionFiles]) {
@@ -773,6 +1105,21 @@ if (rolledChangelog) {
   step(`Roll ${config.changelog} to ${version}`)
   if (dryRun) console.log(`  ${yellow('would write')} ${config.changelog}`)
   else writeFileSync(config.changelog, rolledChangelog)
+  staged.push(config.changelog)
+} else if (draftedNotes && config.changelog && existsSync(config.changelog)) {
+  step(`Add the drafted ${version} section to ${config.changelog}`)
+  if (dryRun) console.log(`  ${yellow('would write')} ${config.changelog}`)
+  else {
+    writeFileSync(
+      config.changelog,
+      insertChangelogSection(
+        readFileSync(config.changelog, 'utf8'),
+        version,
+        new Date().toISOString().slice(0, 10),
+        draftedNotes,
+      ),
+    )
+  }
   staged.push(config.changelog)
 }
 

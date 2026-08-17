@@ -2,6 +2,27 @@
 
 All notable changes to @entro314labs/release-kit.
 
+## [Unreleased]
+
+### Added
+
+- **Optional AI assistant**, off by default, for two jobs: writing the Conventional Commits
+  message for a dirty working tree (`--commit`) and drafting release notes from the commit
+  log when the changelog has no section for the version. Drafted notes are written into the
+  changelog, used as the tag annotation, and posted as the GitHub release body.
+- **`claude` and `codex` supported**, each with `--model` and `--effort` passed through in
+  that tool's own spelling, settable per-invocation or as `{ tool, model, effort }` in
+  `release.config.json`. Adding another CLI is one row in `ASSISTANTS`.
+- **Attribution is stripped** from every draft: `Co-Authored-By`, `Generated with` and
+  tool-signed `Signed-off-by` lines never reach a commit, tag or changelog. A human
+  `Signed-off-by` is preserved.
+- **Drafts are validated, not trusted.** A commit subject that does not parse as
+  Conventional Commits is rejected rather than committed, and notes are truncated at their
+  last heading or list item so trailing model commentary and stray code fences are dropped.
+- Every assistant failure — missing, unauthenticated, timed out, unusable answer — falls
+  back to the previous behaviour. Naming a tool that is not installed is a loud error;
+  `"auto"` degrades quietly.
+
 ## [1.0.3] - 2026-08-17
 
 ### Fixed
