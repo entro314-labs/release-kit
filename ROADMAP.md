@@ -56,6 +56,74 @@ which is `cmd.exe` on Windows, so any publish command with shell syntax behaves 
 Path handling uses `node:path` throughout, so it may well work — but "may well" is the
 honest description.
 
+## Expansion
+
+Requested directions. Several are smaller than they look, because `publish` is already an
+arbitrary command — `cargo publish`, `twine upload` and `goreleaser release` all run today.
+What is missing is per-tool _preflight_, and recipes for the tools that overlap.
+
+### A GitHub Action
+
+A composite action wrapping the CLI, so a workflow is one `uses:` rather than a `run:` with
+a pinned `npx`. Cheap to build. It should come after the repository has CI and tests of its
+own, since an action is a second surface to keep working.
+
+### Preflight for more registries
+
+Each registry is a row in `REGISTRIES` declaring how its CLI answers "am I authenticated"
+and "does this version exist". Publishing already works without a row; the row buys the
+early failure and the skip-if-already-published behaviour.
+
+| Target        | Publish                               | Auth                                     | Already published                           |
+| ------------- | ------------------------------------- | ---------------------------------------- | ------------------------------------------- |
+| cargo         | `cargo publish`                       | `CARGO_REGISTRY_TOKEN`, or `cargo login` | crates.io API, or `cargo publish --dry-run` |
+| Python wheels | `uv publish` _(done)_, `twine upload` | `TWINE_API_TOKEN` for twine              | PyPI JSON API                               |
+| RubyGems      | `gem push`                            | `~/.gem/credentials`                     | `gem list --remote --exact`                 |
+| NuGet         | `dotnet nuget push`                   | `--api-key`                              | registry API                                |
+| Docker / OCI  | `docker push`                         | `docker login`                           | manifest inspect                            |
+
+Two corrections to the original list, so they are not built as stated:
+
+- **pip is not a publish target.** pip installs; PyPI receives. `uv publish` and
+  `twine upload` are the two publishers, and `uv` is already supported.
+- **winget is not a registry push.** `wingetcreate` opens a pull request against
+  `microsoft/winget-pkgs`. That is a submission workflow, not a publish command, and it
+  belongs with the build-and-publish tools below rather than in this table.
+
+### Detecting more project files
+
+Currently detected: `package.json`, `pyproject.toml`, `Cargo.toml`, `VERSION`, plus the
+module path from `go.mod`. Candidates: `build.gradle`, `pom.xml`, `*.csproj`, `*.gemspec`,
+`mix.exs`, `pubspec.yaml`, `composer.json`, `deno.json`, `setup.cfg`.
+
+Worth being clear about the value: the `pattern` escape hatch already handles every one of
+these in three lines of config. Detection buys zero-config, not capability, and each format
+is a pattern to keep correct as that ecosystem changes its conventions. Adding the ones
+people actually use beats adding the long tail.
+
+### Tools that build and publish for you
+
+goreleaser, cargo-dist, electron-builder and similar do their own building _and_ create
+their own GitHub release — which overlaps with the `release` step directly. Verified:
+`goreleaser release` has `--draft`, `--release-footer` and full release-creation flags.
+
+The integration is a division of labour rather than new code: release-kit owns `version`,
+`changelog`, `tag` and `push`; the build tool owns the artifacts and the release.
+
+```json
+{ "publish": "goreleaser release --clean", "steps": ["version", "changelog", "tag", "push", "publish"] }
+```
+
+Dropping `release` from `steps` is what makes this work — otherwise both create a release
+and the second one fails. This needs a documented recipe and a test, not a feature.
+
+### Attaching artifacts built by other Actions
+
+Already possible: a completed release writes `tag` and `release-url` to `$GITHUB_OUTPUT`, so
+a later job can `gh release upload ${{ steps.release.outputs.tag }} …`. The `assets` config
+covers files that exist before the release runs; anything built afterwards uploads to the
+tag. What is missing is worked examples, and guidance on which of the two orderings to use.
+
 ## Considered and declined
 
 Recorded so they are not rediscovered as ideas.
