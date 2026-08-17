@@ -552,6 +552,11 @@ including a directory that is not a repository.
 - Whatever the `publish` command needs — for the default, a live `npm login` session
   (two hours) or an OIDC trusted-publishing environment
 
+## 🗺 Roadmap
+
+Known defects, missing infrastructure, and the ideas that were considered and declined —
+with the reasoning — are in [ROADMAP.md](ROADMAP.md).
+
 ## 🤝 Contributing
 
 The tool releases itself, so a change ships the same way it would in any consuming project:
