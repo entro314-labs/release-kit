@@ -4,6 +4,8 @@ All notable changes to @entro314labs/release-kit.
 
 ## [Unreleased]
 
+## [2.3.2] - 2026-08-17
+
 ### Fixed
 
 - **A version that already has a changelog heading is never rolled again.** An empty
