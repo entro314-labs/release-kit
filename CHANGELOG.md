@@ -6,6 +6,11 @@ All notable changes to @entro314labs/release-kit.
 
 ### Added
 
+- **Publish preflight for bun, uv and Go**, alongside npm and pnpm. Each ecosystem declares
+  how its CLI answers "who am I" and "does this version exist", so the checks fit the tool
+  actually publishing: `bun pm whoami`, a `UV_PUBLISH_TOKEN` in the environment for uv, and
+  `go list -m` for Go, where the tag is the release. A publish command outside that set runs
+  as written with no preflight.
 - **Works in any language, not just Node.** `versionFile` points at wherever a project keeps
   its version; the format is inferred from the file name (`.json`, `.toml`, or a plain file
   holding just the version), with a `pattern` escape hatch for anything else. `versionFiles`

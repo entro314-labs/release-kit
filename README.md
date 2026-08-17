@@ -256,13 +256,28 @@ Only one step is Node-specific: `publish`. Committing, changelog rolling, taggin
 and GitHub releases are the same everywhere, so `versionFile` points at wherever a project
 keeps its version and the rest works unchanged.
 
-| Project                        | Config                                                       |
-| ------------------------------ | ------------------------------------------------------------ |
-| Node                           | nothing — `package.json` is the default                      |
-| Rust                           | `{"versionFile": "Cargo.toml", "publish": "cargo publish"}`  |
-| Python                         | `{"versionFile": "pyproject.toml", "publish": "uv publish"}` |
-| Anything with a `VERSION` file | `{"versionFile": "VERSION", "publish": null}`                |
-| Versioned only by tag          | `{"versionFile": null}`, then `release-kit 1.2.3`            |
+| Project                        | Config                                                                          |
+| ------------------------------ | ------------------------------------------------------------------------------- |
+| Node (npm)                     | nothing — `package.json` and `npm publish` are the defaults                     |
+| Node (pnpm / bun)              | `{"publish": "pnpm publish --tag %d"}` or `{"publish": "bun publish --tag %d"}` |
+| Rust                           | `{"versionFile": "Cargo.toml", "publish": "cargo publish"}`                     |
+| Python                         | `{"versionFile": "pyproject.toml", "publish": "uv publish"}`                    |
+| Go                             | `{"versionFile": null, "publish": "go list -m %n@%t"}` — the tag is the release |
+| Anything with a `VERSION` file | `{"versionFile": "VERSION", "publish": null}`                                   |
+| Versioned only by tag          | `{"versionFile": null}`, then `release-kit 1.2.3`                               |
+
+The publish step also gets a preflight when the command is one it recognises:
+
+| Publish command | Authentication                        | Already published?                  |
+| --------------- | ------------------------------------- | ----------------------------------- |
+| `npm` / `pnpm`  | `whoami`                              | `view <name>@<version>`             |
+| `bun`           | `bun pm whoami`                       | `bun pm view <name>@<version>`      |
+| `uv`            | `UV_PUBLISH_TOKEN` in the environment | none — `uv` skips duplicates itself |
+| `go`            | none needed                           | `go list -m <module>@<tag>`         |
+
+Anything else runs as written with no preflight. The project name comes from the manifest —
+`name` in `package.json`, `Cargo.toml` or `pyproject.toml`, `module` in `go.mod` — falling
+back to the repository directory.
 
 The format is inferred from the file name: `.json` reads the `"version"` field, `.toml`
 reads the first `version = "x.y.z"` line, and any other file is treated as containing just
