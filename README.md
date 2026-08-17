@@ -346,6 +346,37 @@ name, `%d` npm dist-tag. In the `publish` command line the substituted values ar
 shell-quoted, so a version carrying shell metacharacters is passed through as one literal
 argument.
 
+### Continuous integration
+
+Non-interactive by default: the confirmation prompt is skipped when stdin is not a TTY, and
+`gh` picks up `GITHUB_TOKEN` on its own. Pass `--yes` to be explicit.
+
+```yaml
+- uses: actions/checkout@v5
+  with:
+    fetch-depth: 0 # release notes and the last-tag lookup need real history
+- id: release
+  run: npx @entro314labs/release-kit@2.1.0 minor --yes
+  env:
+    GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+- run: echo "shipped ${{ steps.release.outputs.tag }} ${{ steps.release.outputs.release-url }}"
+```
+
+On success it writes to `$GITHUB_OUTPUT`, so later steps can act on what happened instead of
+re-deriving it: `version`, `tag`, `name`, `dist-tag`, `steps`, `published`, `release-url`.
+Nothing is written on a dry run, and an unwritable `$GITHUB_OUTPUT` never fails a release
+that already completed.
+
+Three things CI does that are worth knowing about:
+
+- **`fetch-depth: 0`.** The default checkout is a shallow clone, which hides the history
+  release notes are drafted from. It still releases correctly, but the notes describe a
+  fraction of the work, so a shallow clone is called out as a warning.
+- **Detached HEAD.** Tag and pull-request checkouts leave no branch to push, which is a
+  preflight failure rather than a confusing push error.
+- **Signing.** Runners have no signing key, so disable it for the run rather than shipping
+  keys around: `git -c commit.gpgsign=false -c tag.gpgsign=false`.
+
 ### Signing
 
 Signing is git's, not this tool's: commits and tags are made with plain `git commit` and

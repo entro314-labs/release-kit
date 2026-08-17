@@ -32,7 +32,14 @@
  */
 
 import { execFileSync, execSync } from 'node:child_process'
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
+import {
+  appendFileSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  writeFileSync,
+} from 'node:fs'
 import { homedir, tmpdir } from 'node:os'
 import { basename, join, relative, resolve, sep } from 'node:path'
 import { createInterface } from 'node:readline/promises'
@@ -1106,10 +1113,20 @@ if (runs('commit') && !assistant) {
 }
 
 const branch = tryRead('git', ['rev-parse', '--abbrev-ref', 'HEAD'])
+// A detached HEAD has no branch to push, and reports itself as the literal "HEAD", which
+// would otherwise be compared against config.branch and pushed as a ref of that name.
+const detached = branch === 'HEAD'
 if (!branch) fail('could not read the current branch')
-else if (config.branch && branch !== config.branch) {
+else if (detached) {
+  fail('HEAD is detached — a release needs a branch to push. Check one out first.')
+} else if (config.branch && branch !== config.branch) {
   fail(`on '${branch}', expected '${config.branch}'`)
 } else ok(`on ${branch}`)
+
+// A shallow clone (CI checkouts default to depth 1) hides the history that release notes
+// and the last-tag lookup are derived from. It still releases correctly; the notes just
+// silently describe a fraction of the work, so say so before that happens.
+const shallow = tryRead('git', ['rev-parse', '--is-shallow-repository']) === 'true'
 
 if (!succeeds('git', ['remote', 'get-url', config.remote])) {
   fail(`no '${config.remote}' remote configured`)
@@ -1118,7 +1135,7 @@ if (!succeeds('git', ['remote', 'get-url', config.remote])) {
   // Fetch so the tag and behind-remote checks below see the real remote state.
   if (!succeeds('git', ['fetch', '--quiet', '--tags', config.remote])) {
     fail(`could not fetch from ${config.remote}`)
-  } else if (branch) {
+  } else if (branch && !detached) {
     const upstream = `${config.remote}/${branch}`
     if (!succeeds('git', ['rev-parse', '--verify', '--quiet', `refs/remotes/${upstream}`])) {
       note(`${upstream} does not exist yet — the push will create it`)
@@ -1233,6 +1250,12 @@ function draftNotesFor(v) {
   if (!assistant) return null
   const { lastTag, subjects } = commitsSinceLastTag()
   if (!subjects.length) return null
+  if (shallow) {
+    warn(
+      `shallow clone: only ${subjects.length} commit(s) are visible, so the notes will ` +
+        'describe part of the release. Check out with full history (fetch-depth: 0).',
+    )
+  }
   note(`drafting notes from ${subjects.length} commit(s) with ${assistantName}...`)
   return draftReleaseNotes(v, subjects, lastTag)
 }
@@ -1417,6 +1440,41 @@ if (runs('release') && !releaseExists) {
   ]
   mutate('gh', args, notes ? { input: `${notes}\n` } : {})
 }
+
+/**
+ * Hand the result back to whatever is orchestrating this. GitHub Actions reads key=value
+ * pairs from $GITHUB_OUTPUT, so a workflow can gate later steps on what actually happened
+ * rather than re-deriving it from the repository.
+ */
+function emitOutputs() {
+  const file = process.env.GITHUB_OUTPUT
+  if (!file || dryRun) return
+  const releaseUrl = runs('release')
+    ? (tryRead('gh', ['release', 'view', tag, '--json', 'url', '--jq', '.url']) ?? '')
+    : ''
+  const outputs = {
+    version,
+    tag,
+    name: projectName,
+    'dist-tag': distTag,
+    steps: STEPS.filter(runs).join(','),
+    published: String(!!publishCommand && !alreadyPublished),
+    'release-url': releaseUrl,
+  }
+  try {
+    appendFileSync(
+      file,
+      `${Object.entries(outputs)
+        .map(([key, value]) => `${key}=${value}`)
+        .join('\n')}\n`,
+    )
+    note(`wrote ${Object.keys(outputs).length} outputs to $GITHUB_OUTPUT`)
+  } catch {
+    // Outputs are a convenience; never fail a completed release over them.
+  }
+}
+
+emitOutputs()
 
 console.log(
   `\n${green(bold(dryRun ? 'Dry run complete — nothing was changed.' : `Released ${tag}`))}`,

@@ -8,6 +8,13 @@ All notable changes to @entro314labs/release-kit.
 
 ### Added
 
+- **GitHub Actions outputs.** A completed release writes `version`, `tag`, `name`,
+  `dist-tag`, `steps`, `published` and `release-url` to `$GITHUB_OUTPUT`, so later steps can
+  act on the result instead of re-deriving it. Nothing is written on a dry run, and an
+  unwritable path never fails a release that already succeeded.
+- **A shallow clone is called out.** CI checkouts default to depth 1, which hides the
+  history release notes are drafted from — the release was correct but the notes silently
+  described a fraction of the work.
 - **Signing is checked before anything mutates.** With `commit.gpgsign` or `tag.gpgsign`
   enabled, a key that git cannot load previously failed at the commit step — after the
   version had already been written. Preflight now verifies the key resolves, using git's own
@@ -15,6 +22,9 @@ All notable changes to @entro314labs/release-kit.
 
 ### Fixed
 
+- **A detached HEAD is a preflight failure** rather than a confusing branch mismatch. Tag
+  and pull-request checkouts leave no branch to push; it previously compared the literal
+  "HEAD" against the configured branch and reported being up to date with `origin/HEAD`.
 - **`--sync` no longer crashes when the script is piped from stdin.** Copying itself needs a
   file on disk, and `import.meta.url` points at a synthetic `[eval]` path when piped, so it
   failed on a missing file with a raw stack trace. It now explains the situation.
