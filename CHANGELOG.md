@@ -12,6 +12,18 @@ All notable changes to @entro314labs/release-kit.
 
 ### Added
 
+- **`release-kit auto` derives the version from Conventional Commits**, following
+  release-please's default strategy: breaking is major, `feat:` is minor, everything else is
+  a patch, softened below `1.0.0` where a breaking change bumps the minor instead of jumping
+  to `1.0.0`. It reports the bump and the commits behind it before acting.
+- **`Release-As: 2.0.0` in a commit body pins the version**, so the decision can live in git
+  history rather than on the command line.
+- **`versioning`** accepts `always-patch`, `always-minor` and `always-major` for projects
+  that deliberately never infer.
+- **Release notes are grouped by commit type without an assistant.** Commits are collected
+  under Features, Bug Fixes, Performance Improvements and Reverts, with breaking changes
+  first and chores, CI, docs and tests hidden. This sits above the assistant and GitHub's
+  generated notes, so useful notes no longer depend on having a drafting CLI installed.
 - **The version source is detected when unconfigured.** With no `versionFile` set it looks
   for `package.json`, `pyproject.toml`, `Cargo.toml`, then `VERSION`, so a Python or Rust
   project needs no configuration to release. Previously it insisted on `package.json` and

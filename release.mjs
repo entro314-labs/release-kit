@@ -66,6 +66,8 @@ import { createInterface } from 'node:readline/promises'
  *   commitMessage   string   release commit subject
  *   releaseTitle    string   GitHub release title
  *   assets          string[] files attached to the GitHub release
+ *   versioning      string   how `auto` derives a bump: "conventional", or
+ *                            always-patch / always-minor / always-major to never infer
  *   assistant       string|object  drafting CLI for commit messages and notes. A key of
  *                            ASSISTANTS, "auto" for the first available, or null. The
  *                            object form { tool, model, effort } also pins which model and
@@ -105,6 +107,7 @@ const DEFAULTS = {
   releaseTitle: '%t',
   assets: [],
   assistant: null,
+  versioning: 'conventional',
 }
 
 /**
@@ -360,16 +363,122 @@ function runAssistant(prompt) {
 function commitsSinceLastTag() {
   const lastTag = tryRead('git', ['describe', '--tags', '--abbrev=0'])
   const range = lastTag ? `${lastTag}..HEAD` : 'HEAD'
-  const log = tryRead('git', ['log', '--format=%s', range]) ?? ''
-  return {
-    lastTag,
-    subjects: log
-      .split('\n')
-      .filter(
-        (s) =>
-          s && !/^chore\(release\)/i.test(s) && !/^Merge (branch|pull request|remote)/i.test(s),
-      ),
+  // %B is the whole message: bodies carry BREAKING CHANGE and Release-As footers. A record
+  // separator keeps multi-line messages parseable when splitting the log back apart.
+  const raw = tryRead('git', ['log', `--format=%B%x1e`, range]) ?? ''
+  const commits = raw
+    .split('\u001e')
+    .map((entry) => entry.trim())
+    .filter(Boolean)
+    .map((entry) => {
+      const [subject, ...rest] = entry.split('\n')
+      return { subject: subject.trim(), body: rest.join('\n').trim() }
+    })
+    .filter(
+      ({ subject }) =>
+        subject &&
+        !/^chore\(release\)/i.test(subject) &&
+        !/^Merge (branch|pull request|remote)/i.test(subject) &&
+        !/^wip\b/i.test(subject) &&
+        !/^(fixup|squash)!/.test(subject),
+    )
+  return { lastTag, commits, subjects: commits.map((c) => c.subject) }
+}
+
+/**
+ * Conventional Commit types and the changelog heading each lands under, following
+ * release-please's defaults. Types marked hidden are real changes but not release notes:
+ * a reader upgrading does not need to know the CI config moved.
+ */
+const CHANGELOG_SECTIONS = [
+  { type: 'feat', section: 'Features' },
+  { type: 'fix', section: 'Bug Fixes' },
+  { type: 'perf', section: 'Performance Improvements' },
+  { type: 'revert', section: 'Reverts' },
+  { type: 'docs', section: 'Documentation', hidden: true },
+  { type: 'style', section: 'Styles', hidden: true },
+  { type: 'refactor', section: 'Code Refactoring', hidden: true },
+  { type: 'test', section: 'Tests', hidden: true },
+  { type: 'build', section: 'Build System', hidden: true },
+  { type: 'ci', section: 'Continuous Integration', hidden: true },
+  { type: 'chore', section: 'Miscellaneous Chores', hidden: true },
+]
+
+/**
+ * Parse a commit into the parts a release cares about.
+ *
+ * @returns {{type: string, scope: string|null, breaking: boolean, subject: string,
+ *   releaseAs: string|null} | null} null when the subject is not Conventional Commits
+ */
+function parseCommit(subject, body = '') {
+  const match = /^([a-z]+)(?:\(([^)]+)\))?(!)?: (.+)$/i.exec(subject)
+  if (!match) return null
+  const [, type, scope, bang, text] = match
+  // A breaking change is marked either by `!` in the header or a BREAKING CHANGE footer.
+  const breaking = !!bang || /^BREAKING[ -]CHANGE:/m.test(body)
+  // `Release-As: 1.2.3` in a commit body pins the next version, so the decision can live
+  // in git history rather than on the command line.
+  const releaseAs = /^Release-As:\s*v?(\S+)/im.exec(body)?.[1] ?? null
+  return { type: type.toLowerCase(), scope: scope ?? null, breaking, subject: text, releaseAs }
+}
+
+/**
+ * The bump implied by a set of commits, following release-please's default strategy:
+ * a breaking change is major, a feature is minor, anything else is a patch.
+ *
+ * Below 1.0.0 that is usually wrong — a breaking change in a 0.x project conventionally
+ * bumps the minor, not to 1.0.0 — so `preMajor` softens both by one level.
+ *
+ * @returns {{bump: string, breaking: string[], features: string[], releaseAs: string|null}}
+ */
+function inferBump(commits, currentVersion, strategy = 'conventional') {
+  const parsed = commits.map((c) => parseCommit(c.subject, c.body)).filter(Boolean)
+  const releaseAs = parsed.find((c) => c.releaseAs)?.releaseAs ?? null
+  const breaking = parsed.filter((c) => c.breaking).map((c) => c.subject)
+  const features = parsed
+    .filter((c) => !c.breaking && /^feat(ure)?$/.test(c.type))
+    .map((c) => c.subject)
+
+  if (strategy !== 'conventional') {
+    return { bump: strategy.replace(/^always-/, ''), breaking, features, releaseAs }
   }
+
+  const preMajor = currentVersion ? parseVersion(currentVersion)?.major === 0 : false
+  let bump = 'patch'
+  if (breaking.length) bump = preMajor ? 'minor' : 'major'
+  else if (features.length) bump = 'minor'
+  return { bump, breaking, features, releaseAs }
+}
+
+/**
+ * Group commits into changelog sections, hiding the types that are not release notes.
+ * Deterministic and offline: this is what a project gets without an assistant.
+ *
+ * @returns {string | null} markdown body, or null when nothing visible changed
+ */
+function changelogFromCommits(commits) {
+  const parsed = commits.map((c) => parseCommit(c.subject, c.body)).filter(Boolean)
+  const lines = []
+
+  const breaking = parsed.filter((c) => c.breaking)
+  if (breaking.length) {
+    lines.push('### ⚠ BREAKING CHANGES', '')
+    for (const c of breaking) lines.push(`- ${c.scope ? `**${c.scope}:** ` : ''}${c.subject}`)
+    lines.push('')
+  }
+
+  for (const { type, section, hidden } of CHANGELOG_SECTIONS) {
+    if (hidden) continue
+    const inSection = parsed.filter(
+      (c) => c.type === type || (type === 'feat' && c.type === 'feature'),
+    )
+    if (!inSection.length) continue
+    lines.push(`### ${section}`, '')
+    for (const c of inSection) lines.push(`- ${c.scope ? `**${c.scope}:** ` : ''}${c.subject}`)
+    lines.push('')
+  }
+
+  return lines.length ? lines.join('\n').trim() : null
 }
 
 const CONVENTIONAL_TYPES = 'build|chore|ci|docs|feat|fix|perf|refactor|revert|style|test'
@@ -742,7 +851,16 @@ function writeVersionInto(entry, version) {
 // ─────────────────────────────────────────────────────────────────────────────
 
 const argv = process.argv.slice(2)
-const BUMPS = new Set(['major', 'minor', 'patch', 'premajor', 'preminor', 'prepatch', 'prerelease'])
+const BUMPS = new Set([
+  'auto',
+  'major',
+  'minor',
+  'patch',
+  'premajor',
+  'preminor',
+  'prepatch',
+  'prerelease',
+])
 
 const flag = (name) => argv.includes(name)
 const option = (name) => {
@@ -987,6 +1105,9 @@ console.log(
     (dryRun ? `  ${yellow('(dry run — nothing will execute)')}` : ''),
 )
 
+/** What `auto` inferred, kept so preflight can show the reasoning. */
+let autoBump = null
+
 let version
 if (!target) {
   if (!currentVersion) {
@@ -996,6 +1117,29 @@ if (!target) {
     )
   }
   version = currentVersion
+} else if (target === 'auto') {
+  if (!currentVersion) {
+    abort('auto needs a versionFile to bump from. Pass a version explicitly instead.')
+  }
+  const { commits, lastTag } = commitsSinceLastTag()
+  if (!commits.length) {
+    abort(
+      `no releasable commits since ${lastTag ?? 'the start of the project'} — nothing to release`,
+    )
+  }
+  autoBump = inferBump(commits, currentVersion, config.versioning)
+  if (autoBump.releaseAs) {
+    if (!parseVersion(autoBump.releaseAs)) {
+      abort(`Release-As: ${autoBump.releaseAs} in a commit is not a semver version`)
+    }
+    version = autoBump.releaseAs
+  } else {
+    version = incrementVersion(
+      currentVersion,
+      autoBump.bump,
+      requestedPreid ?? preidOf(currentVersion),
+    )
+  }
 } else if (BUMPS.has(target)) {
   if (!currentVersion) {
     abort(`a ${target} bump needs a versionFile to bump from. Pass a version explicitly instead.`)
@@ -1096,6 +1240,20 @@ const problems = []
 const fail = (message) => {
   console.log(`  ${red('fail')} ${message}`)
   problems.push(message)
+}
+
+if (autoBump) {
+  const reason = autoBump.releaseAs
+    ? `Release-As: ${autoBump.releaseAs} in a commit`
+    : autoBump.breaking.length
+      ? `${autoBump.breaking.length} breaking change(s)`
+      : autoBump.features.length
+        ? `${autoBump.features.length} feature(s), no breaking changes`
+        : 'no features or breaking changes'
+  ok(`auto: ${autoBump.bump} — ${reason}`)
+  for (const subject of [...autoBump.breaking, ...autoBump.features].slice(0, 5)) {
+    console.log(dim(`       ${subject}`))
+  }
 }
 
 if (bumping && compareVersions(version, currentVersion) <= 0) {
@@ -1269,11 +1427,15 @@ let draftedNotes = null
  */
 const notesDeferred = !!(dirty && runs('commit') && assistant)
 
-/** Draft notes from the commit log, reporting what it is doing since it takes a moment. */
+/**
+ * Notes for a version, in descending order of how much they can be trusted:
+ * an assistant's prose when one is configured, otherwise the commits grouped by
+ * Conventional Commit type. Only when neither yields anything does GitHub generate them.
+ */
 function draftNotesFor(v) {
-  if (!assistant) return null
-  const { lastTag, subjects } = commitsSinceLastTag()
-  if (!subjects.length) return null
+  const { lastTag, subjects, commits } = commitsSinceLastTag()
+  if (!commits.length) return null
+  if (!assistant) return changelogFromCommits(commits)
   if (shallow) {
     warn(
       `shallow clone: only ${subjects.length} commit(s) are visible, so the notes will ` +
@@ -1281,7 +1443,7 @@ function draftNotesFor(v) {
     )
   }
   note(`drafting notes from ${subjects.length} commit(s) with ${assistantName}...`)
-  return draftReleaseNotes(v, subjects, lastTag)
+  return draftReleaseNotes(v, subjects, lastTag) ?? changelogFromCommits(commits)
 }
 if (config.changelog && existsSync(config.changelog)) {
   const text = readFileSync(config.changelog, 'utf8')

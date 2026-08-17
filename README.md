@@ -144,6 +144,15 @@ pnpm release -- --help
 The target is optional. With no target it releases whatever version `package.json`
 already says — which is the mode to use when a version bump landed in an earlier commit.
 
+| `auto` | derived from the Conventional Commits since the last tag |
+
+`auto` follows release-please's rules: a breaking change (`!` or a `BREAKING CHANGE:`
+footer) is a major, a `feat:` is a minor, anything else is a patch. Below `1.0.0` that is
+softened — a breaking change bumps the minor rather than jumping to `1.0.0`. A commit body
+containing `Release-As: 2.0.0` pins the version outright. It always prints what it inferred
+and why before doing anything. Set `"versioning"` to `always-patch`, `always-minor` or
+`always-major` to never infer.
+
 | Target                               | From `1.2.3`                                     | From `2.0.0-beta.1` |
 | ------------------------------------ | ------------------------------------------------ | ------------------- |
 | _(none)_                             | `1.2.3`                                          | `2.0.0-beta.1`      |
@@ -217,7 +226,11 @@ Notes resolve in this order:
    section ends at the next `##` heading or `---` rule.
 2. The `## [Unreleased]` section, if the version has no section of its own — this is the
    same content that step 2 above is about to promote.
-3. Otherwise GitHub generates them from the commits since the previous tag.
+3. The commits grouped by Conventional Commit type — Features, Bug Fixes, Performance
+   Improvements, Reverts, with breaking changes first and chores, CI and docs hidden. This
+   is deterministic and needs nothing installed, so decent notes are the default rather
+   than something that requires an assistant.
+4. Otherwise GitHub generates them from the commits since the previous tag.
 
 The same text becomes the tag annotation, the GitHub release body, and (when rolled) the
 changelog entry. It is written once and lands in three places.
