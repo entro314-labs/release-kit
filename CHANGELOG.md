@@ -4,6 +4,13 @@ All notable changes to @entro314labs/release-kit.
 
 ## [Unreleased]
 
+### Added
+
+- **Signing is checked before anything mutates.** With `commit.gpgsign` or `tag.gpgsign`
+  enabled, a key that git cannot load previously failed at the commit step — after the
+  version had already been written. Preflight now verifies the key resolves, using git's own
+  config resolution, and says how to disable signing for one run if it does not.
+
 ### Fixed
 
 - **`--sync` no longer crashes when the script is piped from stdin.** Copying itself needs a

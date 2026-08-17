@@ -249,6 +249,7 @@ rather than stopping at the first problem.
 - The remote exists, is reachable, and the branch is not behind it
 - The tag is free — or already exists at `HEAD`, in which case it is reused
 - `gh` is installed and authenticated
+- Commit and tag signing can actually sign, when `commit.gpgsign` or `tag.gpgsign` is on
 - The publishing CLI is authenticated, and the version is not already on the registry
 - Configured release assets exist
 - A changelog section for the version exists _(a warning, not a failure — it falls back
@@ -344,6 +345,23 @@ Command and message strings expand four tokens: `%v` version, `%t` tag, `%n` pac
 name, `%d` npm dist-tag. In the `publish` command line the substituted values are
 shell-quoted, so a version carrying shell metacharacters is passed through as one literal
 argument.
+
+### Signing
+
+Signing is git's, not this tool's: commits and tags are made with plain `git commit` and
+`git tag`, so they are signed exactly when `commit.gpgsign` and `tag.gpgsign` say to, with
+whatever key `user.signingkey` resolves to. There is no key handling here to get wrong.
+
+What it does add is a preflight check, because an unusable key otherwise fails at the commit
+step with the version already written. For CI, where a signing key usually is not present,
+disable signing for that run rather than configuring keys:
+
+```sh
+git -c commit.gpgsign=false -c tag.gpgsign=false release-kit minor --yes
+```
+
+For commits to show as **Verified** on GitHub, the SSH key must be registered as a _signing_
+key in your account, which is a separate list from authentication keys.
 
 ### Publishing and authentication
 

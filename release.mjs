@@ -33,7 +33,7 @@
 
 import { execFileSync, execSync } from 'node:child_process'
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { homedir, tmpdir } from 'node:os'
 import { basename, join, relative, resolve, sep } from 'node:path'
 import { createInterface } from 'node:readline/promises'
 
@@ -1128,6 +1128,30 @@ if (!succeeds('git', ['remote', 'get-url', config.remote])) {
       else if (behind !== '0') fail(`${behind} commit(s) behind ${upstream} — pull first`)
       else ok(`up to date with ${upstream}`)
     }
+  }
+}
+
+// Signing is configured per repository and inherited, never managed here — git already
+// owns that. But a signing setup that cannot produce a signature fails at the commit step,
+// after the version has been written, so it is worth catching before anything mutates.
+const signsSomething = ['commit', 'version', 'changelog', 'tag'].some(runs)
+const signingKeys = ['commit.gpgsign', 'tag.gpgsign'].filter(
+  (key) => tryRead('git', ['config', '--get', key]) === 'true',
+)
+if (signsSomething && signingKeys.length) {
+  const format = tryRead('git', ['config', '--get', 'gpg.format']) || 'openpgp'
+  const signingKey = tryRead('git', ['config', '--get', 'user.signingkey'])
+  const keyPath = signingKey?.replace(/^~/, homedir())
+  if (!signingKey) {
+    fail(`${signingKeys.join(' and ')} enabled but user.signingkey is not set`)
+  } else if (format === 'ssh' && /^[~/.]/.test(signingKey) && !existsSync(keyPath)) {
+    fail(
+      `signing key ${signingKey} does not exist.\n` +
+        '       Point user.signingkey at a key that is present, or disable signing for this ' +
+        'run with `git -c commit.gpgsign=false -c tag.gpgsign=false`.',
+    )
+  } else {
+    ok(`signing commits and tags (${format})`)
   }
 }
 
