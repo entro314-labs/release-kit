@@ -25,11 +25,14 @@
     "url": "git+https://github.com/entro314-labs/release-kit.git"
   },
   "bin": {
-    "release-kit": "release.mjs"
+    "release-kit": "release.mjs",
+    "release-train": "train.mjs"
   },
   "files": [
     "release.mjs",
+    "train.mjs",
     "README.md",
+    "TRAIN.md",
     "LICENSE"
   ],
   "type": "module",

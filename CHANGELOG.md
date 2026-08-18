@@ -4,6 +4,18 @@ All notable changes to @entro314labs/release-kit.
 
 ## [Unreleased]
 
+### Added
+
+- **`release-train`** — a second bin, `train.mjs`, orchestrating multi-package releases in
+  dependency order across a monorepo or a workspace of sibling git repositories, with
+  release-kit as the per-package worker. Membership comes from `train.config.json`; order,
+  versions and the dependency graph are derived from the package manifests. Includes
+  registry-aware planning (an unpublished manifest version is released as-is; a manifest
+  behind the registry refuses), cascade bumps for dependents, internal range rewriting,
+  whole-train preflight, `seed-tags` for cold starts, and an optional train summary with
+  an assistant-drafted announcement. Prototype: planning phases and `seed-tags` work;
+  execution is not wired up yet. Design and usage in TRAIN.md.
+
 ### Changed
 
 - **Every commit type is reported.** `chore`, `ci`, `docs`, `style`, `refactor`, `test` and

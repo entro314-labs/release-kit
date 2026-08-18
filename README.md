@@ -58,6 +58,7 @@ Released v2.5.0
 | [📚 Libraries versus apps](#-libraries-versus-apps)                     | which steps you want, and why           |
 | [🤖 Assistant](#-assistant-optional)                                    | optional AI drafting                    |
 | [🌍 Any language](#-any-language)                                       | Rust, Python, tag-only, anything        |
+| [🚂 Release trains](#-release-trains)                                   | monorepos and multi-repo workspaces     |
 | [✅ Preflight](#-preflight)                                             | what is checked before anything mutates |
 | [♻️ Recovering from a failed run](#️-recovering-from-a-failed-run)       | why re-running is safe                  |
 | [⚙️ Configuration](#️-configuration)                                     | `release.config.json`, publishing, auth |
@@ -390,6 +391,23 @@ Stopping at `push` because the tag is what triggers the build pipeline — see
 
 The project name comes from the manifest when there is one (`name` in `package.json`,
 `Cargo.toml` or `pyproject.toml`), and falls back to the repository directory.
+
+## 🚂 Release trains
+
+Interdependent packages — a monorepo, or a plain folder of sibling git repositories —
+release with the second bin in this package:
+
+```sh
+release-train --dry-run     # plan + whole-train preflight, execute nothing
+```
+
+`train.mjs` derives the dependency graph and publish order from the package manifests
+(never from declared config), releases dependencies before dependents with release-kit as
+the per-package worker, rewrites internal ranges, and refuses the whole train before
+anything mutates if any package would fail. A `train.config.json` declares only which
+directories are members. Design, configuration and the full pipeline are in
+[TRAIN.md](TRAIN.md). Prototype status: planning, preflight and `seed-tags` work;
+execution is not wired up yet.
 
 ## ⚙️ Configuration
 
