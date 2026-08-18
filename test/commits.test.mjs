@@ -90,7 +90,7 @@ describe('inferBump', () => {
 })
 
 describe('changelogFromCommits', () => {
-  it('groups by type and hides the noise', () => {
+  it('reports every type by default, since a changelog is a record', () => {
     const out = kit.changelogFromCommits([
       c('a', 'feat(api): add streaming'),
       c('b', 'fix: header whitespace'),
@@ -98,11 +98,27 @@ describe('changelogFromCommits', () => {
       c('d', 'ci: cache'),
       c('e', 'perf: faster parse'),
     ])
-    assert.equal(
-      out,
-      '### Features\n\n- **api:** add streaming\n\n' +
-        '### Bug Fixes\n\n- header whitespace\n\n' +
-        '### Performance Improvements\n\n- faster parse',
+    assert.deepEqual(
+      out.split('\n').filter((l) => l.startsWith('###')),
+      [
+        '### Features',
+        '### Bug Fixes',
+        '### Performance Improvements',
+        '### Continuous Integration',
+        '### Miscellaneous Chores',
+      ],
+    )
+  })
+
+  it('leaves out only the types a project asks to hide', () => {
+    const out = kit.changelogFromCommits(
+      [c('a', 'feat: x'), c('b', 'chore: tidy'), c('c', 'ci: cache')],
+      null,
+      ['chore', 'ci'],
+    )
+    assert.deepEqual(
+      out.split('\n').filter((l) => l.startsWith('###')),
+      ['### Features'],
     )
   })
 
@@ -123,9 +139,13 @@ describe('changelogFromCommits', () => {
     )
   })
 
-  it('returns null when nothing visible changed', () => {
-    assert.equal(kit.changelogFromCommits([c('a', 'chore: x'), c('b', 'ci: y')]), null)
+  it('returns null only when nothing parses at all', () => {
     assert.equal(kit.changelogFromCommits([c('a', 'random work')]), null)
+    assert.equal(
+      kit.changelogFromCommits([c('a', 'chore: x')], null, ['chore']),
+      null,
+      'or when everything present is hidden',
+    )
   })
 })
 
@@ -174,8 +194,8 @@ describe('types outside the table', () => {
     assert.match(out, /### Other Changes\n\n- patch a CVE\n- add Greek/)
   })
 
-  it('keeps the deliberately hidden types hidden', () => {
-    assert.equal(kit.changelogFromCommits([c('a', 'chore: tidy'), c('b', 'ci: cache')]), null)
+  it('hides an unanticipated type too when it is listed', () => {
+    assert.equal(kit.changelogFromCommits([c('a', 'security: x')], null, ['security']), null)
   })
 
   it('groups dependency bumps', () => {

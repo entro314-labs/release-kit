@@ -4,6 +4,24 @@ All notable changes to @entro314labs/release-kit.
 
 ## [Unreleased]
 
+### Changed
+
+- **Every commit type is reported.** `chore`, `ci`, `docs`, `style`, `refactor`, `test` and
+  `build` were hidden, following release-please and goreleaser. But a changelog is a record,
+  and silently omitting work makes it a partial one. A project that wants the shorter
+  version lists the types to drop in `hiddenTypes`.
+- **The commits treated as bookkeeping are configurable** through `ignoreCommits`, rather
+  than fixed. The defaults are unchanged: the previous release's own commit, merges that
+  duplicate the branch they bring in, and `wip`/`fixup!`/`squash!` markers.
+
+### Added
+
+- **`--notes <source>`** forces where release notes come from — `changelog`, `assistant`,
+  `commits` or `github` — instead of walking the priority list. A named source that produces
+  nothing is an error rather than a quiet fall-through. `--assistant` names the tool;
+  `--notes` names the source, so making an assistant available no longer leaves it unused
+  behind a populated `[Unreleased]`.
+
 ## [2.6.0] - 2026-08-18
 
 ### Fixed

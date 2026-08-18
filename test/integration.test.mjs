@@ -215,3 +215,52 @@ describe('commits that will not appear in the notes', () => {
     assert.match(stdout, /2 of 3 commit\(s\) are not Conventional Commits/)
   })
 })
+
+describe('choosing where notes come from', () => {
+  const withChangelog = () =>
+    makeRepo({
+      changelog: '# Changelog\n\n## [Unreleased]\n\n- Hand-written note.\n',
+      config: { publish: null, steps: ['tag'], notesFile: 'n.md' },
+    })
+
+  const tagAnnotation = (repo, tag) =>
+    execFileSync('git', ['tag', '-l', tag, '--format=%(contents)'], {
+      cwd: repo.root,
+      encoding: 'utf8',
+    })
+
+  it('prefers a hand-written changelog by default', () => {
+    const repo = withChangelog()
+    release(repo, ['1.1.0', '--yes'])
+    assert.match(tagAnnotation(repo, 'v1.1.0'), /Hand-written note/)
+  })
+
+  it('forces the commit log when asked, over a populated [Unreleased]', () => {
+    // --notes names the source; --assistant only names the tool. Asking for one thing and
+    // being given another is worse than being told it is unavailable.
+    const repo = withChangelog()
+    execFileSync('git', ['tag', '-a', 'v1.0.0', '-m', 'base'], { cwd: repo.root })
+    writeFileSync(join(repo.root, 'a.txt'), 'a')
+    execFileSync('git', ['add', '-A'], { cwd: repo.root })
+    execFileSync('git', ['commit', '-qm', 'feat(api): add a streaming writer'], { cwd: repo.root })
+
+    const { status, stdout } = release(repo, ['1.1.0', '--notes', 'commits', '--yes'])
+    assert.equal(status, 0, stdout)
+    const annotation = tagAnnotation(repo, 'v1.1.0')
+    assert.match(annotation, /### Features/)
+    assert.ok(!annotation.includes('Hand-written note'), 'the changelog did not win')
+  })
+
+  it('refuses when the named source cannot produce anything', () => {
+    const repo = withChangelog()
+    const { status, stdout } = release(repo, ['1.1.0', '--notes', 'assistant', '--yes'])
+    assert.equal(status, 1)
+    assert.match(stdout, /none is available/)
+  })
+
+  it('rejects an unknown source', () => {
+    const { status, stdout } = release(withChangelog(), ['1.1.0', '--notes', 'telepathy', '--yes'])
+    assert.equal(status, 1)
+    assert.match(stdout, /unknown notes source/)
+  })
+})

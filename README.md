@@ -240,6 +240,14 @@ Notes resolve in this order:
    than something that requires an assistant.
 4. Otherwise GitHub generates them from the commits since the previous tag.
 
+`--notes <source>` forces one instead of walking that list: `changelog`, `assistant`,
+`commits`, or `github`. A named source that produces nothing is an error rather than a
+quiet fall-through — asking for one thing and being given another is worse than being told
+it is unavailable.
+
+`--assistant` names the _tool_; `--notes` names the _source_. Making an assistant available
+does not make it preferred, because a hand-written changelog entry should still win.
+
 The same text becomes the tag annotation, the GitHub release body, and (when rolled) the
 changelog entry. It is written once and lands in three places.
 

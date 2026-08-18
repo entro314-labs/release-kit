@@ -69,6 +69,12 @@ import { createInterface } from 'node:readline/promises'
  *   assets          string[] files attached to the GitHub release
  *   notesFile       string   write the resolved release notes here, for a build tool that
  *                            takes them as a file (goreleaser --release-notes, and similar)
+ *   notes           string   where release notes come from: "auto" tries the changelog,
+ *                            then an assistant, then the commits; or force one of
+ *                            changelog / assistant / commits / github
+ *   hiddenTypes     string[] commit types to leave out of the notes; empty means report all
+ *   ignoreCommits   string[] regexes for commits that are bookkeeping rather than change:
+ *                            release commits, merges, work-in-progress, autosquash markers
  *   versioning      string   how `auto` derives a bump: "conventional", or
  *                            always-patch / always-minor / always-major to never infer
  *   assistant       string|object  drafting CLI for commit messages and notes. A key of
@@ -112,6 +118,14 @@ const DEFAULTS = {
   assistant: null,
   notesFile: null,
   versioning: 'conventional',
+  notes: 'auto',
+  hiddenTypes: [],
+  ignoreCommits: [
+    '^chore\\(release\\)',
+    '^Merge (branch|pull request|remote)',
+    '^wip\\b',
+    '^(fixup|squash)!',
+  ],
 }
 
 /**
@@ -153,6 +167,7 @@ Flags:
   --dry-run            print every step and execute nothing
   --yes, -y            skip the confirmation prompt
   --notes-file <path>  write the resolved release notes to a file for the next tool
+  --notes <source>     where notes come from: auto, changelog, assistant, commits, github
   --assistant <name>   drafting CLI to use: auto, none, claude, codex
   --assistant-model <name>
                        model the assistant runs with (e.g. sonnet, opus)
@@ -382,6 +397,7 @@ function runAssistant(prompt) {
 
 /** Commit subjects since the last tag, with release and merge commits filtered out. */
 function commitsSinceLastTag() {
+  const ignored = (config.ignoreCommits ?? []).map((pattern) => new RegExp(pattern, 'i'))
   const lastTag = tryRead('git', ['describe', '--tags', '--abbrev=0'])
   const range = lastTag ? `${lastTag}..HEAD` : 'HEAD'
   // %B is the whole message: bodies carry BREAKING CHANGE and Release-As footers. A record
@@ -397,22 +413,20 @@ function commitsSinceLastTag() {
       const [subject, ...rest] = message.split('\n')
       return { hash: hash.trim(), subject: subject.trim(), body: rest.join('\n').trim() }
     })
-    .filter(
-      ({ subject }) =>
-        subject &&
-        !/^chore\(release\)/i.test(subject) &&
-        !/^Merge (branch|pull request|remote)/i.test(subject) &&
-        !/^wip\b/i.test(subject) &&
-        !/^(fixup|squash)!/.test(subject),
-    )
+    // Bookkeeping rather than change: the previous release's own commit, merges that
+    // duplicate the branch they bring in, and markers meant to be autosquashed away.
+    .filter(({ subject }) => subject && !ignored.some((re) => re.test(subject)))
   const kept = withoutRevertedCommits(commits)
   return { lastTag, commits: kept, subjects: kept.map((c) => c.subject) }
 }
 
 /**
- * Conventional Commit types and the changelog heading each lands under, following
- * release-please's defaults. Types marked hidden are real changes but not release notes:
- * a reader upgrading does not need to know the CI config moved.
+ * Conventional Commit types and the changelog heading each lands under.
+ *
+ * Every type is reported. release-please and goreleaser hide `chore`, `ci`, `docs` and the
+ * rest by default, on the view that a reader upgrading does not care — but a changelog is a
+ * record, and silently omitting work makes it a partial one. A project that wants the
+ * shorter version lists the types to drop in `hiddenTypes`.
  */
 const CHANGELOG_SECTIONS = [
   { type: 'feat', section: 'Features' },
@@ -420,13 +434,13 @@ const CHANGELOG_SECTIONS = [
   { type: 'perf', section: 'Performance Improvements' },
   { type: 'revert', section: 'Reverts' },
   { type: 'deps', section: 'Dependencies' },
-  { type: 'docs', section: 'Documentation', hidden: true },
-  { type: 'style', section: 'Styles', hidden: true },
-  { type: 'refactor', section: 'Code Refactoring', hidden: true },
-  { type: 'test', section: 'Tests', hidden: true },
-  { type: 'build', section: 'Build System', hidden: true },
-  { type: 'ci', section: 'Continuous Integration', hidden: true },
-  { type: 'chore', section: 'Miscellaneous Chores', hidden: true },
+  { type: 'docs', section: 'Documentation' },
+  { type: 'refactor', section: 'Code Refactoring' },
+  { type: 'build', section: 'Build System' },
+  { type: 'ci', section: 'Continuous Integration' },
+  { type: 'test', section: 'Tests' },
+  { type: 'style', section: 'Styles' },
+  { type: 'chore', section: 'Miscellaneous Chores' },
 ]
 
 /**
@@ -498,7 +512,7 @@ function inferBump(commits, currentVersion, strategy = 'conventional') {
  *
  * @returns {string | null} markdown body, or null when nothing visible changed
  */
-function changelogFromCommits(commits, links = null) {
+function changelogFromCommits(commits, links = null, hidden = []) {
   const parsed = commits.map((c) => parseCommit(c.subject, c.body, c.hash)).filter(Boolean)
   const lines = []
 
@@ -523,8 +537,9 @@ function changelogFromCommits(commits, links = null) {
   }
 
   const known = new Set(CHANGELOG_SECTIONS.map((s) => s.type))
-  for (const { type, section, hidden } of CHANGELOG_SECTIONS) {
-    if (hidden) continue
+  const hiddenTypes = new Set(hidden)
+  for (const { type, section } of CHANGELOG_SECTIONS) {
+    if (hiddenTypes.has(type)) continue
     const inSection = parsed.filter(
       (c) => c.type === type || (type === 'feat' && c.type === 'feature'),
     )
@@ -537,7 +552,9 @@ function changelogFromCommits(commits, links = null) {
   // A conventional type nobody anticipated — `security:`, `i18n:` — is still a change
   // someone made deliberately. Dropping it silently is how a security fix goes unmentioned.
   // The hidden types are excluded because hiding them is the point.
-  const other = parsed.filter((c) => !known.has(c.type) && c.type !== 'feature')
+  const other = parsed.filter(
+    (c) => !known.has(c.type) && c.type !== 'feature' && !hiddenTypes.has(c.type),
+  )
   if (other.length) {
     lines.push('### Other Changes', '')
     for (const c of other) lines.push(bullet(c, c.subject))
@@ -952,7 +969,7 @@ function rollUnreleased(text, version, date) {
 
   // Remove the section wherever it sits, then place the release by version.
   const withoutUnreleased = text.slice(0, match.index) + (next ? after.slice(next.index) : '')
-  const placed = insertChangelogSection(withoutUnreleased.trimEnd() + '\n', version, date, body)
+  const placed = insertChangelogSection(`${withoutUnreleased.trimEnd()}\n`, version, date, body)
 
   // A fresh [Unreleased] belongs above every release, whatever the file looked like before.
   const first = sectionOffsets(placed)[0] ?? placed.length
@@ -1098,6 +1115,7 @@ const explicitDistTag = option('--dist-tag')
 const requestedPreid = option('--preid')
 const autoCommit = flag('--commit')
 const requestedNotesFile = option('--notes-file')
+const requestedNotesSource = option('--notes')
 const requestedAssistant = option('--assistant')
 const requestedModel = option('--assistant-model')
 const requestedEffort = option('--assistant-effort')
@@ -1166,6 +1184,7 @@ const VALUE_OPTIONS = new Set([
   '--skip',
   '--preid',
   '--dist-tag',
+  '--notes',
   '--notes-file',
   '--assistant',
   '--assistant-model',
@@ -1731,7 +1750,23 @@ function reportChangelogOrder(text) {
   }
 }
 
-// Notes: the changelog section for this version, else a draft, else GitHub generates them.
+/**
+ * Where the notes come from. "auto" walks the list — a hand-written changelog section beats
+ * anything generated — while an explicit source forces one, because asking for a thing and
+ * being given something else is worse than being told the thing is unavailable.
+ */
+const NOTE_SOURCES = ['auto', 'changelog', 'assistant', 'commits', 'github']
+const notesSource = requestedNotesSource ?? config.notes ?? 'auto'
+if (!NOTE_SOURCES.includes(notesSource)) {
+  abort(`unknown notes source "${notesSource}". Known: ${NOTE_SOURCES.join(', ')}`)
+}
+if (notesSource === 'assistant' && !assistant) {
+  abort(
+    'notes are set to come from an assistant, but none is available.\n' +
+      '  Add --assistant auto, or set "assistant" in release.config.json.',
+  )
+}
+
 let notes = null
 let rolledChangelog = null
 let draftedNotes = null
@@ -1761,7 +1796,9 @@ function draftNotesFor(v) {
         'will not appear in the notes.',
     )
   }
-  if (!assistant) return changelogFromCommits(commits, remoteLinks(config.remote))
+  // An explicitly named source wins over the assistant being merely available.
+  if (!assistant || notesSource === 'commits')
+    return changelogFromCommits(commits, remoteLinks(config.remote), config.hiddenTypes)
   if (shallow) {
     warn(
       `shallow clone: only ${subjects.length} commit(s) are visible, so the notes will ` +
@@ -1771,42 +1808,58 @@ function draftNotesFor(v) {
   note(`drafting notes from ${subjects.length} commit(s) with ${assistantName}...`)
   return (
     draftReleaseNotes(v, commits, lastTag, remoteLinks(config.remote)) ??
-    changelogFromCommits(commits, remoteLinks(config.remote))
+    changelogFromCommits(commits, remoteLinks(config.remote), config.hiddenTypes)
   )
 }
-if (config.changelog && existsSync(config.changelog)) {
-  const text = readFileSync(config.changelog, 'utf8')
-  notes = changelogSection(text, version)
-  if (notes) {
-    ok(`${config.changelog} has a ${version} section`)
-    reportChangelogOrder(text)
-  } else {
-    rolledChangelog = rollUnreleased(text, version, new Date().toISOString().slice(0, 10))
+const changelogText =
+  config.changelog && existsSync(config.changelog) ? readFileSync(config.changelog, 'utf8') : null
+if (changelogText) reportChangelogOrder(changelogText)
+
+// `github` means write nothing and let GitHub generate from the commit log.
+if (notesSource === 'github') {
+  note('notes will be generated by GitHub')
+} else if (notesSource === 'changelog' && !changelogText) {
+  fail(`notes are set to come from ${config.changelog}, which does not exist`)
+} else {
+  const wantsChangelog = notesSource === 'auto' || notesSource === 'changelog'
+
+  // A section already written for this version is the most authoritative thing there is.
+  if (wantsChangelog && changelogText) {
+    notes = changelogSection(changelogText, version)
+    if (notes) ok(`${config.changelog} has a ${version} section`)
+  }
+
+  // Otherwise promote [Unreleased], which is equally hand-written.
+  if (!notes && wantsChangelog && changelogText) {
+    rolledChangelog = rollUnreleased(changelogText, version, new Date().toISOString().slice(0, 10))
     if (rolledChangelog) {
       notes = changelogSection(rolledChangelog, version)
       ok(`${config.changelog}: [Unreleased] will become [${version}]`)
-      reportChangelogOrder(text)
+    }
+  }
+
+  // Generate, either because nothing was written or because a source was named.
+  if (!notes) {
+    if (notesDeferred) {
+      ok('release notes will be drafted after the commit')
     } else {
-      draftedNotes = notesDeferred ? null : draftNotesFor(version)
-      if (notesDeferred) {
-        ok(`${config.changelog}: a ${version} section will be drafted after the commit`)
-      } else if (draftedNotes) {
+      draftedNotes = draftNotesFor(version)
+      if (draftedNotes) {
         notes = draftedNotes
-        ok(`${config.changelog}: a ${version} section will be drafted by ${assistantName}`)
-      } else {
-        warn(
-          `${config.changelog} has no ${version} or [Unreleased] section — GitHub will generate the notes`,
+        ok(
+          notesSource === 'commits' || !assistant
+            ? 'release notes built from the commit log'
+            : `release notes drafted by ${assistantName}`,
         )
+      } else if (notesSource === 'auto') {
+        warn(
+          `no ${config.changelog ?? 'changelog'} section and nothing to draft from — GitHub will generate the notes`,
+        )
+      } else {
+        fail(`notes are set to come from "${notesSource}", which produced nothing`)
       }
     }
   }
-} else {
-  // No changelog file at all: there is nothing to roll, but notes can still be drafted for
-  // the tag annotation and the GitHub release.
-  notes = notesDeferred ? null : draftNotesFor(version)
-  if (notesDeferred) ok('release notes will be drafted after the commit')
-  else if (notes) ok(`release notes drafted by ${assistantName}`)
-  else if (config.changelog) note(`no ${config.changelog} — GitHub will generate the notes`)
 }
 
 for (const asset of config.assets) {
