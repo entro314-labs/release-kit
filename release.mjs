@@ -77,6 +77,9 @@ import { createInterface } from 'node:readline/promises'
  *                            release commits, merges, work-in-progress, autosquash markers
  *   versioning      string   how `auto` derives a bump: "conventional", or
  *                            always-patch / always-minor / always-major to never infer
+ *   verify          string   command run during preflight — a project's own gate (tests,
+ *                            build). Non-zero aborts before anything mutates, instead of a
+ *                            prepublishOnly hook failing after the commit, tag and push
  *   assistant       string|object  drafting CLI for commit messages and notes. A key of
  *                            ASSISTANTS, "auto" for the first available, or null. The
  *                            object form { tool, model, effort } also pins which model and
@@ -130,6 +133,7 @@ const DEFAULTS = {
     '^wip\\b',
     '^(fixup|squash)!',
   ],
+  verify: null,
 }
 
 /**
@@ -624,6 +628,35 @@ function withoutRevertedCommits(commits) {
   )
 }
 
+/**
+ * Semver strings a drafted message names that the staged changes never touch. The prompt
+ * forbids narrating versions, but a model can still read an unchanged `"version"` context
+ * line and describe it as work — a draft once claimed "release v1.4.5" for a commit that
+ * changed no version at all. Only added and removed lines are the change.
+ */
+function inventedVersions(message, changedLines) {
+  const versions = message.match(/\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?/g) ?? []
+  return [...new Set(versions)].filter((version) => !changedLines.includes(version))
+}
+
+/**
+ * A repository URL reduced to what identifies the repository: `git+` and protocol
+ * prefixes, the `git@host:` shorthand, a trailing `.git` and letter case all vary between
+ * package.json and a git remote without meaning a different repo.
+ */
+function normalizeRepoUrl(url) {
+  if (!url) return null
+  return url
+    .trim()
+    .replace(/^git\+/, '')
+    .replace(/^git@([^:]+):/, 'https://$1/')
+    .replace(/^ssh:\/\/git@/, 'https://')
+    .replace(/^git:\/\//, 'https://')
+    .replace(/\.git$/, '')
+    .replace(/\/+$/, '')
+    .toLowerCase()
+}
+
 const CONVENTIONAL_TYPES = 'build|chore|ci|docs|feat|fix|perf|refactor|revert|style|test'
 const CONVENTIONAL_RE = new RegExp(`^(${CONVENTIONAL_TYPES})(\\([^)]+\\))?!?: .+`)
 
@@ -662,7 +695,19 @@ function draftCommitMessage() {
   const message = runAssistant(prompt)
   if (!message) return null
   const [subject] = message.split('\n')
-  return CONVENTIONAL_RE.test(subject) ? message : null
+  if (!CONVENTIONAL_RE.test(subject)) return null
+  // The prompt forbids narrating versions; this is the deterministic backstop — the same
+  // pattern as the citation check on drafted notes: validated, not trusted.
+  const changedLines = (tryRead('git', ['diff', '--cached', '--unified=0']) ?? '')
+    .split('\n')
+    .filter((line) => /^[+-](?![+-])/.test(line))
+    .join('\n')
+  const invented = inventedVersions(message, changedLines)
+  if (invented.length) {
+    note(`draft rejected: it names ${invented.join(', ')}, which the staged changes never touch`)
+    return null
+  }
+  return message
 }
 
 /**
@@ -1631,9 +1676,9 @@ else if (detached) {
   fail(`on '${branch}', expected '${config.branch}'`)
 } else ok(`on ${branch}`)
 
-// A shallow clone (CI checkouts default to depth 1) hides the history that release notes
-// and the last-tag lookup are derived from. It still releases correctly; the notes just
-// silently describe a fraction of the work, so say so before that happens.
+// A shallow clone (CI checkouts default to depth 1) is only a problem when it truncates
+// the history the release actually reads. Whether it does is checked after the fetch
+// below, where the answer is most accurate.
 const shallow = tryRead('git', ['rev-parse', '--is-shallow-repository']) === 'true'
 
 if (!succeeds('git', ['remote', 'get-url', config.remote])) {
@@ -1652,6 +1697,50 @@ if (!succeeds('git', ['remote', 'get-url', config.remote])) {
       if (behind === null) fail(`could not compare HEAD with ${upstream}`)
       else if (behind !== '0') fail(`${behind} commit(s) behind ${upstream} — pull first`)
       else ok(`up to date with ${upstream}`)
+    }
+  }
+}
+
+// If the previous release tag is reachable from HEAD, a shallow clone hides nothing the
+// release reads — notes and `auto` see the whole span. No reachable tag means the history
+// is provably truncated: `auto` would infer the bump from a fraction of the commits, so
+// that is a failure; commit-derived notes merely come out partial, so that is a warning.
+let shallowHidesHistory = false
+if (shallow) {
+  const reachableTag = tryRead('git', ['describe', '--tags', '--abbrev=0'])
+  shallowHidesHistory = !reachableTag
+  if (reachableTag) {
+    ok(
+      `shallow clone, but history back to ${reachableTag} is visible — notes and auto are complete`,
+    )
+  } else if (autoBump) {
+    fail(
+      'shallow clone hides the history `auto` infers the bump from — no previous tag is ' +
+        'reachable.\n       Fetch full history: fetch-depth: 0 in CI, or git fetch --unshallow.',
+    )
+  } else {
+    warn(
+      'shallow clone: no previous tag is reachable, so notes drafted from commits will ' +
+        'describe only the visible history. Fetch full history (fetch-depth: 0, or ' +
+        'git fetch --unshallow).',
+    )
+  }
+}
+
+// The registry's "Repository" link comes from the manifest, not from git — a mismatch
+// ships a broken link with every publish, and npm only warns after the fact.
+if (existsSync('package.json')) {
+  const repoField = readJson('package.json').repository
+  const declared = typeof repoField === 'string' ? repoField : repoField?.url
+  const remoteUrl = tryRead('git', ['remote', 'get-url', config.remote])
+  if (declared && remoteUrl && /:\/\/|@/.test(declared)) {
+    if (normalizeRepoUrl(declared) !== normalizeRepoUrl(remoteUrl)) {
+      warn(
+        `package.json repository is ${declared}, but ${config.remote} is ${remoteUrl} — ` +
+          'the registry will link the wrong repository',
+      )
+    } else if (!/^git\+.*\.git$/.test(declared)) {
+      note(`npm normalizes repository.url on publish — \`npm pkg fix\` writes that form`)
     }
   }
 }
@@ -1819,7 +1908,7 @@ function draftNotesFor(v) {
   // An explicitly named source wins over the assistant being merely available.
   if (!assistant || notesSource === 'commits')
     return changelogFromCommits(commits, remoteLinks(config.remote), config.hiddenTypes)
-  if (shallow) {
+  if (shallowHidesHistory) {
     warn(
       `shallow clone: only ${subjects.length} commit(s) are visible, so the notes will ` +
         'describe part of the release. Check out with full history (fetch-depth: 0).',
@@ -1897,6 +1986,19 @@ if (taggedCommit && runs('tag') && (bumping || rolledChangelog)) {
       '       That commit would leave the tag behind HEAD. Release a new version, or use ' +
       '--only with the steps that remain.',
   )
+}
+
+// The project's own gate, run while nothing has mutated. Without this, a prepublishOnly
+// hook is the gate — and it fails at the publish step, after the commit, tag and push.
+if (config.verify) {
+  note(`running verify: ${config.verify}`)
+  try {
+    execSync(config.verify, { stdio: 'pipe', encoding: 'utf8' })
+    ok(`verify passed: ${config.verify}`)
+  } catch (err) {
+    const tail = `${err.stdout ?? ''}${err.stderr ?? ''}`.trim().split('\n').slice(-12).join('\n')
+    fail(`verify failed: ${config.verify}\n${indent(tail)}`)
+  }
 }
 
 if (problems.length) {

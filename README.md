@@ -289,7 +289,14 @@ rather than stopping at the first problem.
 - Commit and tag signing can actually sign, and the key is one GitHub will accept
 - The publishing CLI is authenticated, and the version is not already published
 - Configured release assets exist
-- A shallow clone is reported, since it truncates the history notes come from _(warning)_
+- The configured `verify` command passes — the project's own gate (tests, build) runs
+  before anything mutates, instead of a `prepublishOnly` hook failing after the commit,
+  tag and push
+- `package.json`'s `repository` matches the git remote, so the registry's "Repository"
+  link is not broken _(warning)_
+- A shallow clone only matters when it truncates the history the release reads: with the
+  previous tag reachable it passes, without one it fails `auto` (the bump would be inferred
+  from partial history) and warns otherwise
 - A changelog section for the version exists _(warning — it falls back to generated notes)_
 
 Under `--dry-run` the failures are reported and then the remaining steps are shown anyway,
@@ -420,21 +427,22 @@ execution is not wired up yet.
 `release.config.json`, beside `package.json`. Every key is optional; unknown keys abort
 rather than being silently ignored.
 
-| Key             | Default                  | Meaning                                                      |
-| --------------- | ------------------------ | ------------------------------------------------------------ |
-| `steps`         | all but `commit`         | Which steps run; the order is fixed                          |
-| `tagPrefix`     | `"v"`                    | Prepended to the version to form the tag                     |
-| `branch`        | `"main"`                 | The only branch a release may run from; `null` allows any    |
-| `remote`        | `"origin"`               | Git remote to push to                                        |
-| `changelog`     | `"CHANGELOG.md"`         | Changelog path; `null` for a project without one             |
-| `versionFile`   | detected                 | Where the version lives; `null` versions by tag alone        |
-| `versionFiles`  | `[]`                     | Further files kept in sync; a path or `{ path, pattern }`    |
-| `publish`       | `"npm publish --tag %d"` | Publish command; `null` means none is configured             |
-| `versioning`    | `"conventional"`         | How `auto` infers; or `always-patch` / `-minor` / `-major`   |
-| `assistant`     | `null`                   | Drafting CLI: a name, `"auto"`, or `{ tool, model, effort }` |
-| `commitMessage` | `"chore(release): %t"`   | Release commit subject                                       |
-| `releaseTitle`  | `"%t"`                   | GitHub release title                                         |
-| `assets`        | `[]`                     | Files attached to the GitHub release                         |
+| Key             | Default                  | Meaning                                                               |
+| --------------- | ------------------------ | --------------------------------------------------------------------- |
+| `steps`         | all but `commit`         | Which steps run; the order is fixed                                   |
+| `tagPrefix`     | `"v"`                    | Prepended to the version to form the tag                              |
+| `branch`        | `"main"`                 | The only branch a release may run from; `null` allows any             |
+| `remote`        | `"origin"`               | Git remote to push to                                                 |
+| `changelog`     | `"CHANGELOG.md"`         | Changelog path; `null` for a project without one                      |
+| `versionFile`   | detected                 | Where the version lives; `null` versions by tag alone                 |
+| `versionFiles`  | `[]`                     | Further files kept in sync; a path or `{ path, pattern }`             |
+| `publish`       | `"npm publish --tag %d"` | Publish command; `null` means none is configured                      |
+| `versioning`    | `"conventional"`         | How `auto` infers; or `always-patch` / `-minor` / `-major`            |
+| `verify`        | `null`                   | Command run during preflight; non-zero aborts before anything mutates |
+| `assistant`     | `null`                   | Drafting CLI: a name, `"auto"`, or `{ tool, model, effort }`          |
+| `commitMessage` | `"chore(release): %t"`   | Release commit subject                                                |
+| `releaseTitle`  | `"%t"`                   | GitHub release title                                                  |
+| `assets`        | `[]`                     | Files attached to the GitHub release                                  |
 
 Command and message strings expand four tokens: `%v` version, `%t` tag, `%n` package
 name, `%d` npm dist-tag. In the `publish` command line the substituted values are
@@ -592,7 +600,10 @@ downgrade, so a configured pipeline fails loudly; `"auto"` degrades quietly by d
 
 - **A dirty working tree is committed instead of refusing to release.** The tree is
   staged, a Conventional Commits message is drafted for the staged diff, and the commit is
-  made — by default, whenever an assistant is configured (`--skip commit` opts out). The subject is validated
+  made — by default, whenever an assistant is configured (`--skip commit` opts out).
+  The draft is validated, not trusted: a subject that is not Conventional Commits, or a
+  message naming a version the staged changes never touch (a model narrating an unchanged
+  `"version"` context line), is rejected rather than committed. The subject is validated
   against the Conventional Commits grammar; an answer that does not parse is rejected rather
   than committed. Attribution lines (`Co-Authored-By`, `Generated with`) are stripped, so
   the tool never signs your commits.

@@ -93,6 +93,45 @@ describe('preflight', () => {
     assert.match(stdout, /assistant/)
   })
 
+  it('runs the configured verify command and fails preflight when it fails', () => {
+    const repo = makeRepo()
+    writeFileSync(
+      join(repo.root, 'release.config.json'),
+      JSON.stringify({ verify: 'node -e "console.error(0); process.exit(1)"' }),
+    )
+    execFileSync('git', ['add', '--all'], { cwd: repo.root })
+    execFileSync('git', ['commit', '-qm', 'chore: add config'], { cwd: repo.root })
+    const { status, stdout } = release(repo, ['minor', '--yes'])
+    assert.equal(status, 1)
+    assert.match(stdout, /verify failed/)
+    assert.deepEqual(tagsOnRemote(repo), []) // nothing mutated
+  })
+
+  it('passes preflight when the verify command succeeds', () => {
+    const repo = makeRepo()
+    writeFileSync(join(repo.root, 'release.config.json'), JSON.stringify({ verify: 'node -e ""' }))
+    execFileSync('git', ['add', '--all'], { cwd: repo.root })
+    execFileSync('git', ['commit', '-qm', 'chore: add config'], { cwd: repo.root })
+    const { status, stdout } = release(repo, ['minor', '--yes'])
+    assert.equal(status, 0, stdout)
+    assert.match(stdout, /verify passed/)
+  })
+
+  it('warns when package.json names a different repository than the remote', () => {
+    const repo = makeRepo()
+    const manifest = JSON.parse(readFile(repo, 'package.json'))
+    manifest.repository = { type: 'git', url: 'https://github.com/somewhere/else.git' }
+    writeFileSync(join(repo.root, 'package.json'), `${JSON.stringify(manifest, null, 2)}\n`)
+    execFileSync('git', ['add', '--all'], { cwd: repo.root })
+    execFileSync('git', ['commit', '-qm', 'chore: point repository elsewhere'], { cwd: repo.root })
+    const { status, stdout } = release(repo, ['minor', '--yes'])
+    assert.equal(status, 0, stdout)
+    assert.match(
+      stdout,
+      /package\.json repository is .* the registry will link the wrong repository/,
+    )
+  })
+
   it('refuses a detached HEAD, which is how CI checks out a tag', () => {
     const repo = makeRepo()
     execFileSync('git', ['checkout', '-q', '--detach', 'HEAD'], { cwd: repo.root })

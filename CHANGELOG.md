@@ -4,6 +4,25 @@ All notable changes to @entro314labs/release-kit.
 
 ## [Unreleased]
 
+### Added
+
+- **`verify`** — a config key naming the project's own gate (`"verify": "pnpm check"`),
+  run during preflight. A failing gate now aborts while nothing has mutated, instead of a
+  `prepublishOnly` hook failing at the publish step — after the commit, the tag and the
+  push.
+- **The repository URL is checked against the git remote.** A `package.json` `repository`
+  pointing at a different repo than the remote ships a broken "Repository" link with every
+  publish, and npm only warns after the fact; preflight now warns before, and hints at
+  `npm pkg fix` when only the URL format differs.
+
+### Changed
+
+- **The shallow-clone check is predictive instead of blanket.** A shallow clone with the
+  previous release tag reachable hides nothing the release reads, and now passes with an
+  `ok`. One with no reachable tag provably truncates history: that fails `auto` (the bump
+  would be inferred from a fraction of the commits) and warns otherwise, both with the
+  `git fetch --unshallow` / `fetch-depth: 0` fix named.
+
 ### Fixed
 
 - **Drafted commit messages no longer narrate unchanged context lines.** The drafting
@@ -11,7 +30,9 @@ All notable changes to @entro314labs/release-kit.
   often show — are not part of the change, and that version numbers and release
   bookkeeping are never its to describe. A draft had claimed "release v1.4.5" for a
   commit that changed no version at all, because the unchanged `"version"` field was
-  visible in the diff context.
+  visible in the diff context. A deterministic backstop now enforces it: a draft naming
+  a version the staged changes never touch is rejected rather than committed — the same
+  validated-not-trusted pattern as the citation check on drafted notes.
 
 ## [2.7.0] - 2026-08-18
 
