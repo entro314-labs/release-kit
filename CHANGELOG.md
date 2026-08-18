@@ -4,6 +4,15 @@ All notable changes to @entro314labs/release-kit.
 
 ## [Unreleased]
 
+### Fixed
+
+- **Drafted commit messages no longer narrate unchanged context lines.** The drafting
+  prompt now tells the assistant that context lines — including the version fields they
+  often show — are not part of the change, and that version numbers and release
+  bookkeeping are never its to describe. A draft had claimed "release v1.4.5" for a
+  commit that changed no version at all, because the unchanged `"version"` field was
+  visible in the diff context.
+
 ## [2.7.0] - 2026-08-18
 
 ### Changed
