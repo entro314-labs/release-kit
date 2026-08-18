@@ -419,6 +419,7 @@ const CHANGELOG_SECTIONS = [
   { type: 'fix', section: 'Bug Fixes' },
   { type: 'perf', section: 'Performance Improvements' },
   { type: 'revert', section: 'Reverts' },
+  { type: 'deps', section: 'Dependencies' },
   { type: 'docs', section: 'Documentation', hidden: true },
   { type: 'style', section: 'Styles', hidden: true },
   { type: 'refactor', section: 'Code Refactoring', hidden: true },
@@ -435,7 +436,9 @@ const CHANGELOG_SECTIONS = [
  *   releaseAs: string|null} | null} null when the subject is not Conventional Commits
  */
 function parseCommit(subject, body = '', hash = '') {
-  const match = /^([a-z]+)(?:\(([^)]+)\))?(!)?: (.+)$/i.exec(subject)
+  // Conventional Commits does not restrict the type to letters — `i18n:` and `a11y:` are
+  // types people really use, and `[a-z]+` silently failed to parse them at all.
+  const match = /^([a-z][a-z0-9-]*)(?:\(([^)]+)\))?(!)?: (.+)$/i.exec(subject)
   if (!match) return null
   const [, type, scope, bang, text] = match
   const shortHash = hash.slice(0, 7)
@@ -519,6 +522,7 @@ function changelogFromCommits(commits, links = null) {
     lines.push('')
   }
 
+  const known = new Set(CHANGELOG_SECTIONS.map((s) => s.type))
   for (const { type, section, hidden } of CHANGELOG_SECTIONS) {
     if (hidden) continue
     const inSection = parsed.filter(
@@ -527,6 +531,16 @@ function changelogFromCommits(commits, links = null) {
     if (!inSection.length) continue
     lines.push(`### ${section}`, '')
     for (const c of inSection) lines.push(bullet(c, c.subject))
+    lines.push('')
+  }
+
+  // A conventional type nobody anticipated — `security:`, `i18n:` — is still a change
+  // someone made deliberately. Dropping it silently is how a security fix goes unmentioned.
+  // The hidden types are excluded because hiding them is the point.
+  const other = parsed.filter((c) => !known.has(c.type) && c.type !== 'feature')
+  if (other.length) {
+    lines.push('### Other Changes', '')
+    for (const c of other) lines.push(bullet(c, c.subject))
     lines.push('')
   }
 

@@ -33,6 +33,20 @@ All notable changes to @entro314labs/release-kit.
   the repository, where they protected nobody and were eventually lost.
 - **CI.** Format, lint and tests on Linux, macOS and Windows.
 
+### Added
+
+- **An "Other Changes" section** collects conventional types outside the table —
+  `security:`, `i18n:` — which were previously dropped without a word. A security fix going
+  unmentioned in release notes is the failure worth preventing. Deliberately hidden types
+  (`chore`, `ci`, `docs`, `style`, `refactor`, `test`, `build`) stay hidden.
+- **A `Dependencies` section** for `deps:` commits.
+
+### Fixed
+
+- **A commit type containing digits now parses.** The type pattern was `[a-z]+`, so `i18n:`
+  and `a11y:` failed to parse as Conventional Commits at all and their commits vanished from
+  the notes entirely.
+
 ### Changed
 
 - **`writeVersionInto` takes `dryRun` as a parameter** rather than reading a module-level

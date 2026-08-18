@@ -153,3 +153,35 @@ describe('HOSTS', () => {
     assert.deepEqual(kit.HOSTS['github.com'], { issue: 'issues', commit: 'commit' })
   })
 })
+
+describe('types outside the table', () => {
+  it('parses a type containing digits', () => {
+    // `[a-z]+` silently failed to parse these at all, so the commit vanished.
+    assert.equal(kit.parseCommit('i18n: add Greek').type, 'i18n')
+    assert.equal(kit.parseCommit('a11y(nav): focus ring').type, 'a11y')
+  })
+
+  it('still refuses prose', () => {
+    assert.equal(kit.parseCommit('just did some stuff'), null)
+  })
+
+  it('collects unanticipated types under Other Changes instead of dropping them', () => {
+    const out = kit.changelogFromCommits([
+      c('a', 'feat: known'),
+      c('b', 'security: patch a CVE'),
+      c('c', 'i18n: add Greek'),
+    ])
+    assert.match(out, /### Other Changes\n\n- patch a CVE\n- add Greek/)
+  })
+
+  it('keeps the deliberately hidden types hidden', () => {
+    assert.equal(kit.changelogFromCommits([c('a', 'chore: tidy'), c('b', 'ci: cache')]), null)
+  })
+
+  it('groups dependency bumps', () => {
+    assert.match(
+      kit.changelogFromCommits([c('a', 'deps: bump serde')]),
+      /### Dependencies\n\n- bump serde/,
+    )
+  })
+})
