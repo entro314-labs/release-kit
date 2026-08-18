@@ -40,6 +40,9 @@ All notable changes to @entro314labs/release-kit.
   unmentioned in release notes is the failure worth preventing. Deliberately hidden types
   (`chore`, `ci`, `docs`, `style`, `refactor`, `test`, `build`) stay hidden.
 - **A `Dependencies` section** for `deps:` commits.
+- **The current version is read from the latest tag** where a repository has no version
+  file. A Go module versions by tag alone, so `auto` and every bump previously had nothing
+  to work from and the version had to be typed out in full each time.
 
 ### Fixed
 

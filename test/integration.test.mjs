@@ -170,3 +170,32 @@ describe('auto', () => {
     assert.ok(tagsOnRemote(repo).includes('v1.1.0'), 'the new tag reached the remote')
   })
 })
+
+describe('repositories that version by tag alone', () => {
+  const goRepo = () =>
+    makeRepo({
+      config: { versionFile: null, publish: null, steps: ['tag', 'push'] },
+      files: { 'go.mod': 'module github.com/acme/tool\n\ngo 1.24\n' },
+    })
+
+  it('reads the current version from the latest tag', () => {
+    // A Go module has no version file — the tag is the version. Without this, auto and
+    // every bump have nothing to work from.
+    const repo = goRepo()
+    execFileSync('git', ['tag', '-a', 'v1.2.0', '-m', 'base'], { cwd: repo.root })
+    writeFileSync(join(repo.root, 'a.go'), 'package main')
+    execFileSync('git', ['add', '-A'], { cwd: repo.root })
+    execFileSync('git', ['commit', '-qm', 'feat: add a thing'], { cwd: repo.root })
+
+    const { status, stdout } = release(repo, ['auto', '--yes'])
+    assert.equal(status, 0, stdout)
+    assert.match(stdout, /1\.2\.0 → 1\.3\.0/)
+    assert.ok(tagsOnRemote(repo).includes('v1.3.0'))
+  })
+
+  it('asks for a version when there is neither a file nor a tag', () => {
+    const { status, stdout } = release(goRepo(), ['auto', '--yes'])
+    assert.equal(status, 1)
+    assert.match(stdout, /nothing to bump from/)
+  })
+})

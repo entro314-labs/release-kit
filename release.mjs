@@ -1202,7 +1202,20 @@ if (versionFile && !existsSync(versionFile.path)) {
   abort(`versionFile ${versionFile.path} does not exist`)
 }
 
-const currentVersion = versionFile ? readVersionFrom(versionFile) : null
+/**
+ * Where a repository versions by tag alone — a Go module, a docs site — the latest tag is
+ * the current version. Without this, `auto` and every bump have nothing to work from and
+ * the version has to be typed out in full every time.
+ */
+function versionFromLastTag() {
+  const tag = tryRead('git', ['describe', '--tags', '--abbrev=0'])
+  if (!tag) return null
+  const bare =
+    config.tagPrefix && tag.startsWith(config.tagPrefix) ? tag.slice(config.tagPrefix.length) : tag
+  return parseVersion(bare) ? bare : null
+}
+
+const currentVersion = versionFile ? readVersionFrom(versionFile) : versionFromLastTag()
 if (versionFile && !currentVersion) {
   abort(`could not read a version from ${versionFile.path}`)
 }
@@ -1294,14 +1307,17 @@ let version
 if (!target) {
   if (!currentVersion) {
     abort(
-      'this repository has no versionFile, so there is no version to default to.\n' +
-        '  Pass one explicitly: release-kit 1.2.3',
+      'nothing to default to: this repository has no versionFile and no tag to read a ' +
+        'version from.\n  Pass one explicitly: release-kit 1.2.3',
     )
   }
   version = currentVersion
 } else if (target === 'auto') {
   if (!currentVersion) {
-    abort('auto needs a versionFile to bump from. Pass a version explicitly instead.')
+    abort(
+      'auto has nothing to bump from: there is no versionFile and no tag to read a version ' +
+        'from.\n  Pass the first version explicitly: release-kit 0.1.0',
+    )
   }
   const { commits, lastTag } = commitsSinceLastTag()
   if (!commits.length) {
@@ -1324,7 +1340,10 @@ if (!target) {
   }
 } else if (BUMPS.has(target)) {
   if (!currentVersion) {
-    abort(`a ${target} bump needs a versionFile to bump from. Pass a version explicitly instead.`)
+    abort(
+      `a ${target} bump has nothing to bump from: no versionFile, and no tag to read a ` +
+        'version from.\n  Pass the version explicitly instead.',
+    )
   }
   const preid = requestedPreid ?? preidOf(currentVersion)
   if (target.startsWith('pre') && !preid) {
