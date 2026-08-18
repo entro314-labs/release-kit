@@ -4,6 +4,8 @@ All notable changes to @entro314labs/release-kit.
 
 ## [Unreleased]
 
+## [2.7.0] - 2026-08-18
+
 ### Changed
 
 - **The `commit` step is now a default step** rather than opt-in behind `--commit`. It
