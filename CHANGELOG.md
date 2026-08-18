@@ -2,6 +2,13 @@
 
 All notable changes to @entro314labs/release-kit.
 
+## [2.5.0] - 2026-08-18
+
+### Features
+
+- **version:** read the current version from the latest tag when there is no file ([3871709](https://github.com/entro314-labs/release-kit/commit/3871709))
+- **notes:** collect unanticipated commit types instead of dropping them ([28b2cd1](https://github.com/entro314-labs/release-kit/commit/28b2cd1))
+
 ## [2.3.3] - 2026-08-17
 
 ### Added
