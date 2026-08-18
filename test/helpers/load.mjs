@@ -34,7 +34,7 @@ export {
   parseVersion, compareVersions, incrementVersion, preidOf, distTagFor,
   changelogSection, rollUnreleased, insertChangelogSection,
   parseCommit, inferBump, changelogFromCommits, withoutRevertedCommits,
-  cleanDraft, cleanNotes, CONVENTIONAL_RE, CHANGELOG_SECTIONS, HOSTS,
+  cleanDraft, cleanNotes, linkCitedCommits, CONVENTIONAL_RE, CHANGELOG_SECTIONS, HOSTS,
   readVersionFrom, writeVersionInto, versionSource, patternFor,
 }`,
   )}`

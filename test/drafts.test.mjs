@@ -94,3 +94,46 @@ describe('CONVENTIONAL_RE', () => {
     }
   })
 })
+
+describe('linkCitedCommits', () => {
+  const commits = [
+    { hash: 'abc1234def', subject: 'feat: a' },
+    { hash: 'deadbee0000', subject: 'fix: b' },
+  ]
+  const links = { commit: 'https://github.com/o/r/commit', issue: 'https://github.com/o/r/issues' }
+
+  it('turns a citation into a link', () => {
+    assert.equal(
+      kit.linkCitedCommits('### Added\n\n- Something (abc1234)', commits, links),
+      '### Added\n\n- Something ([abc1234](https://github.com/o/r/commit/abc1234))',
+    )
+  })
+
+  it('handles a bullet that merges several commits', () => {
+    const out = kit.linkCitedCommits('- Merged work (abc1234, deadbee)', commits, links)
+    assert.match(out, /\[abc1234\].*\[deadbee\]/)
+  })
+
+  it('removes a hash the model invented', () => {
+    // Models produce plausible-looking hashes. Publishing a link to a commit that does not
+    // exist is worse than publishing no link.
+    assert.equal(kit.linkCitedCommits('- Something (0000000)', commits, links), '- Something')
+  })
+
+  it('keeps only the real hashes from a mixed citation', () => {
+    const out = kit.linkCitedCommits('- Something (abc1234, 0000000)', commits, links)
+    assert.match(out, /\[abc1234\]/)
+    assert.ok(!out.includes('0000000'))
+  })
+
+  it('falls back to plain code spans with no remote to link to', () => {
+    assert.equal(
+      kit.linkCitedCommits('- Something (abc1234)', commits, null),
+      '- Something (`abc1234`)',
+    )
+  })
+
+  it('leaves bullets without a citation alone', () => {
+    assert.equal(kit.linkCitedCommits('- Something', commits, links), '- Something')
+  })
+})

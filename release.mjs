@@ -644,8 +644,36 @@ function draftCommitMessage() {
  *
  * @returns {string | null} markdown body (no version heading), or null
  */
-function draftReleaseNotes(version, subjects, lastTag) {
-  if (!subjects.length) return null
+/**
+ * Attach commit links to a drafted bullet's citation.
+ *
+ * The model is asked to end each bullet with the short hashes it covers. Models invent
+ * plausible-looking hashes, so every citation is checked against the commits that actually
+ * exist: real ones become links, invented ones are removed rather than published.
+ *
+ * @returns {string} the notes with citations resolved
+ */
+function linkCitedCommits(notes, commits, links) {
+  const known = new Set(commits.map((c) => (c.hash ?? '').slice(0, 7)).filter(Boolean))
+  return notes.replace(/\s*\(([0-9a-f]{7,40}(?:\s*,\s*[0-9a-f]{7,40})*)\)\s*$/gim, (_, cited) => {
+    const real = [
+      ...new Set(cited.split(/\s*,\s*/).map((h) => h.toLowerCase().slice(0, 7))),
+    ].filter((h) => known.has(h))
+    if (!real.length) return ''
+    const rendered = links
+      ? real.map((h) => `[${h}](${links.commit}/${h})`)
+      : real.map((h) => `\`${h}\``)
+    return ` (${rendered.join(', ')})`
+  })
+}
+
+/**
+ * Draft release notes from the commit log.
+ *
+ * @returns {string | null} markdown body (no version heading), or null
+ */
+function draftReleaseNotes(version, commits, lastTag, links) {
+  if (!commits.length) return null
 
   const prompt = [
     `Write release notes for version ${version}.`,
@@ -654,18 +682,23 @@ function draftReleaseNotes(version, subjects, lastTag) {
     '- Group the changes under Keep a Changelog headings (`### Added`, `### Changed`,',
     '  `### Fixed`, `### Removed`), including only the headings that apply.',
     '- One bullet per user-visible change. Merge related commits into a single bullet.',
+    '- End every bullet with the short hashes it covers, in parentheses: `(abc1234)` or',
+    '  `(abc1234, def5678)` when merged. Copy them exactly from the list below and invent',
+    '  nothing — a hash that is not in the list will be removed.',
     '- Omit internal chores: CI, linting, formatting, dependency bumps, version bumps.',
     '- Write for someone upgrading: say what changed for them, not which files moved.',
     '- Plain, factual language. No hype, no emoji, no concluding summary.',
     '- Output only the markdown body: no version heading, no code fences, no attribution.',
     '- Do NOT explain your reasoning or add any commentary before or after the notes.',
     '',
-    `Commit subjects since ${lastTag ?? 'the start of the project'}:`,
-    ...subjects.map((s) => `- ${s}`),
+    `Commits since ${lastTag ?? 'the start of the project'}:`,
+    ...commits.map((c) => `- ${(c.hash ?? '').slice(0, 7)} ${c.subject}`),
   ].join('\n')
 
   const drafted = runAssistant(prompt)
-  return drafted ? cleanNotes(drafted) : null
+  if (!drafted) return null
+  const cleaned = cleanNotes(drafted)
+  return cleaned ? linkCitedCommits(cleaned, commits, links) : null
 }
 
 /** One-line rendering of an argv, so a multi-line arg (release notes) stays readable. */
@@ -1688,7 +1721,7 @@ function draftNotesFor(v) {
   }
   note(`drafting notes from ${subjects.length} commit(s) with ${assistantName}...`)
   return (
-    draftReleaseNotes(v, subjects, lastTag) ??
+    draftReleaseNotes(v, commits, lastTag, remoteLinks(config.remote)) ??
     changelogFromCommits(commits, remoteLinks(config.remote))
   )
 }

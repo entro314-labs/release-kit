@@ -564,7 +564,10 @@ downgrade, so a configured pipeline fails loudly; `"auto"` degrades quietly by d
   than committed. Attribution lines (`Co-Authored-By`, `Generated with`) are stripped, so
   the tool never signs your commits.
 - **Release notes** are drafted from the commits since the last tag when `CHANGELOG.md` has
-  no section for the version. They are written into the changelog, used as the tag
+  no section for the version. Each bullet ends with a link to the commits it covers: the
+  assistant is given the short hashes and asked to cite them, and every citation is checked
+  against the commits that actually exist. Models invent plausible-looking hashes, so an
+  unrecognised one is removed rather than published as a link to nothing. They are written into the changelog, used as the tag
   annotation, and posted as the GitHub release body — the same "written once, lands in three
   places" path a hand-written section takes.
 
