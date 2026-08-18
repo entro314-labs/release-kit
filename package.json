@@ -41,12 +41,14 @@
     "format:check": "oxfmt --check .",
     "lint": "oxlint .",
     "lint:ci": "oxlint --deny-warnings .",
-    "check": "pnpm run format:check && pnpm run lint:ci",
+    "test": "node --test \"test/**/*.test.mjs\"",
+    "check": "pnpm run format:check && pnpm run lint:ci && pnpm run test",
     "release": "node release.mjs"
   },
   "devDependencies": {
     "oxfmt": "^0.63.0",
-    "oxlint": "^1.78.0"
+    "oxlint": "^1.78.0",
+    "semver": "^7.8.5"
   },
   "engines": {
     "node": ">=22"

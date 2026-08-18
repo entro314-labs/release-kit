@@ -21,6 +21,21 @@ All notable changes to @entro314labs/release-kit.
 
 ## [Unreleased]
 
+### Added
+
+- **A test suite, in the repository.** 63 tests across 6 suites run by `node --test`, with
+  no framework: version arithmetic differentially checked against the real `semver` package,
+  changelog reading and rolling, commit parsing and bump inference, draft sanitising,
+  version-file rewriting, and end-to-end releases against real repositories with a real bare
+  remote. `pnpm test` runs them and `pnpm check` gates on them. They had been living outside
+  the repository, where they protected nobody and were eventually lost.
+- **CI.** Format, lint and tests on Linux, macOS and Windows.
+
+### Changed
+
+- **`writeVersionInto` takes `dryRun` as a parameter** rather than reading a module-level
+  flag declared further down the file. Writing the tests surfaced the dependency.
+
 ## [2.3.2] - 2026-08-17
 
 ### Fixed

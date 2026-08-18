@@ -670,6 +670,17 @@ with the reasoning — are in [ROADMAP.md](ROADMAP.md).
 
 ## 🤝 Contributing
 
+```sh
+pnpm install
+pnpm test     # 63 tests, node --test, no framework
+pnpm check    # format + lint + tests, the same gate CI runs
+```
+
+`test/` holds unit suites for the pure functions and an integration suite that builds real
+throwaway repositories with a real bare remote and stubbed `gh`/`npm`. The integration tests
+pin defects found in use, so a name like "refuses to reuse a tag while still producing a
+commit" is describing something that actually happened.
+
 The tool releases itself, so a change ships the same way it would in any consuming project:
 add a `## [Unreleased]` entry to `CHANGELOG.md`, then run `pnpm release <bump>` from a clone.
 

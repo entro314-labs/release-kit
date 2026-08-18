@@ -961,9 +961,10 @@ function readVersionFrom(entry) {
  * Replace the version in a source file, touching nothing else: only the captured range is
  * rewritten, so formatting, key order and comments all survive.
  *
+ * @param {{dryRun?: boolean}} [options] report the change without making it
  * @returns {boolean} whether the file needed changing
  */
-function writeVersionInto(entry, version) {
+function writeVersionInto(entry, version, { dryRun = false } = {}) {
   const source = versionSource(entry)
   const text = readFileSync(source.path, 'utf8')
   const pattern = patternFor(source)
@@ -1774,7 +1775,7 @@ if (bumping) {
   for (const entry of [versionFile, ...config.versionFiles]) {
     const source = versionSource(entry)
     if (!existsSync(source.path)) abort(`versionFiles entry ${source.path} does not exist`)
-    if (writeVersionInto(source, version)) {
+    if (writeVersionInto(source, version, { dryRun })) {
       staged.push(source.path)
       console.log(`  ${dryRun ? yellow('would write') : dim('wrote')} ${source.path}`)
     }

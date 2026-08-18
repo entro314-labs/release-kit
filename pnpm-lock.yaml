@@ -14,6 +14,9 @@ importers:
       oxlint:
         specifier: ^1.78.0
         version: 1.78.0
+      semver:
+        specifier: ^7.8.5
+        version: 7.8.5
 
 packages:
 
@@ -287,6 +290,11 @@ packages:
       vite-plus:
         optional: true
 
+  semver@7.8.5:
+    resolution: {integrity: sha512-Y7/KDsb8LjooZpwaqGyulO6DQlksgCncchHGk+sZIY4SBvUocMBEFH5Ur1fI4dV+Jvl0w6cjvucaIi40puRioA==}
+    engines: {node: '>=10'}
+    hasBin: true
+
   tinypool@2.1.0:
     resolution: {integrity: sha512-Pugqs6M0m7Lv1I7FtxN4aoyToKg1C4tu+/381vH35y8oENM/Ai7f7C4StcoK4/+BSw9ebcS8jRiVrORFKCALLw==}
     engines: {node: ^20.0.0 || >=22.0.0}
@@ -452,5 +460,7 @@ snapshots:
       '@oxlint/binding-win32-arm64-msvc': 1.78.0
       '@oxlint/binding-win32-ia32-msvc': 1.78.0
       '@oxlint/binding-win32-x64-msvc': 1.78.0
+
+  semver@7.8.5: {}
 
   tinypool@2.1.0: {}

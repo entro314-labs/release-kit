@@ -19,6 +19,17 @@ limit during development. Treat it as untested until someone runs a release with
 
 ## Resolved
 
+- **The package shipped no tests.** 63 tests across 6 suites now live in `test/`, run by
+  `node --test` with no framework: version arithmetic differentially checked against the real
+  `semver` package, changelog reading and rolling, commit parsing and bump inference, draft
+  sanitising, version-file rewriting including the `Cargo.lock` scoping hazard, and
+  end-to-end releases against real repositories with a real bare remote and stubbed
+  `gh`/`npm`. `pnpm test` runs them; `pnpm check` gates on them. The integration suite pins
+  the defects found in use rather than the happy path: a tag left behind `HEAD`, a changelog
+  rolled twice, a misspelled `--skip` silently ignored, a flag value read as the release
+  target, a Python project reaching for npm.
+- **No CI.** `.github/workflows/check.yml` runs format, lint and tests on Linux, macOS and
+  Windows.
 - **`--commit` bundling a whole working tree into one commit.** It still stages everything,
   but the change set is now shown before the prompt and a spread across more than two
   top-level paths is called out as probably more than one piece of work. Splitting commits
@@ -32,29 +43,12 @@ limit during development. Treat it as untested until someone runs a release with
 
 ## Missing infrastructure
 
-### The package ships no tests
-
-Six suites exist — semver arithmetic differentially tested against the real `semver`
-package, changelog extraction, draft sanitising, notes cleanup, bump inference, changelog
-rolling — plus an integration harness that builds throwaway repositories with a real bare
-remote and stubbed `gh`/`npm`. All of it lives outside the repository, which means none of
-it protects anyone but the person who wrote it.
-
-Moving it in is the single highest-value item here. It is also the prerequisite for
-everything else on this page: a release tool with no reproducible tests is a bad place to
-accept contributions.
-
-### No CI
-
-There is no workflow running the check gate or those tests. The tool now emits GitHub
-Actions outputs and documents a CI recipe it does not itself use.
-
 ### Windows is untested
 
-Never run there. One `execSync` invokes the configured `publish` command through a shell,
-which is `cmd.exe` on Windows, so any publish command with shell syntax behaves differently.
-Path handling uses `node:path` throughout, so it may well work — but "may well" is the
-honest description.
+Never run there by hand. One `execSync` invokes the configured `publish` command through a
+shell, which is `cmd.exe` on Windows, so any publish command with shell syntax behaves
+differently. It is now in the CI matrix, which will say whether the rest holds — that is a
+signal, not a claim.
 
 ## Expansion
 
