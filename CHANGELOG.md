@@ -21,6 +21,8 @@ All notable changes to @entro314labs/release-kit.
 
 ## [Unreleased]
 
+## [2.4.0] - 2026-08-18
+
 ### Added
 
 - **A test suite, in the repository.** 63 tests across 6 suites run by `node --test`, with
