@@ -76,6 +76,23 @@ describe('preflight', () => {
     }
   })
 
+  it('rejects extra positional arguments and points at the flag spelling', () => {
+    const repo = makeRepo()
+    const { status, stdout } = release(repo, ['auto', 'assistant', 'auto', '--yes'])
+    assert.equal(status, 1)
+    assert.match(stdout, /unexpected argument/)
+    assert.match(stdout, /--assistant auto/)
+  })
+
+  it('refuses a dirty tree without an assistant, hinting that one would commit it', () => {
+    const repo = makeRepo()
+    writeFileSync(join(repo.root, 'junk.txt'), 'x')
+    const { status, stdout } = release(repo, ['0.5.0', '--yes'], { GH_AUTHED: '1' })
+    assert.equal(status, 1)
+    assert.match(stdout, /working tree is not clean/)
+    assert.match(stdout, /assistant/)
+  })
+
   it('refuses a detached HEAD, which is how CI checks out a tag', () => {
     const repo = makeRepo()
     execFileSync('git', ['checkout', '-q', '--detach', 'HEAD'], { cwd: repo.root })

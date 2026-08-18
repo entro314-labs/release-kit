@@ -4,6 +4,26 @@ All notable changes to @entro314labs/release-kit.
 
 ## [Unreleased]
 
+### Changed
+
+- **The `commit` step is now a default step** rather than opt-in behind `--commit`. It
+  still no-ops on a clean tree, and on a dirty tree it proceeds only when a drafting
+  assistant is configured — without one, preflight refuses the unclean tree as before,
+  now with a hint that an assistant would commit it automatically. So
+  `release-kit auto --assistant auto` releases a dirty tree end to end. Opt out with
+  `--skip commit` or a `steps` config; `--commit` remains as a way to force the step on
+  when a config removed it.
+- **Extra positional arguments abort instead of being silently ignored.**
+  `release-kit auto assistant auto` used to quietly run as `release-kit auto` with no
+  assistant; it now aborts and points at the flag spelling (`--assistant auto`).
+- **Every commit type is reported.** `chore`, `ci`, `docs`, `style`, `refactor`, `test` and
+  `build` were hidden, following release-please and goreleaser. But a changelog is a record,
+  and silently omitting work makes it a partial one. A project that wants the shorter
+  version lists the types to drop in `hiddenTypes`.
+- **The commits treated as bookkeeping are configurable** through `ignoreCommits`, rather
+  than fixed. The defaults are unchanged: the previous release's own commit, merges that
+  duplicate the branch they bring in, and `wip`/`fixup!`/`squash!` markers.
+
 ### Added
 
 - **`release-train`** — a second bin, `train.mjs`, orchestrating multi-package releases in
@@ -15,19 +35,6 @@ All notable changes to @entro314labs/release-kit.
   whole-train preflight, `seed-tags` for cold starts, and an optional train summary with
   an assistant-drafted announcement. Prototype: planning phases and `seed-tags` work;
   execution is not wired up yet. Design and usage in TRAIN.md.
-
-### Changed
-
-- **Every commit type is reported.** `chore`, `ci`, `docs`, `style`, `refactor`, `test` and
-  `build` were hidden, following release-please and goreleaser. But a changelog is a record,
-  and silently omitting work makes it a partial one. A project that wants the shorter
-  version lists the types to drop in `hiddenTypes`.
-- **The commits treated as bookkeeping are configurable** through `ignoreCommits`, rather
-  than fixed. The defaults are unchanged: the previous release's own commit, merges that
-  duplicate the branch they bring in, and `wip`/`fixup!`/`squash!` markers.
-
-### Added
-
 - **`--notes <source>`** forces where release notes come from — `changelog`, `assistant`,
   `commits` or `github` — instead of walking the priority list. A named source that produces
   nothing is an error rather than a quiet fall-through. `--assistant` names the tool;

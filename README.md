@@ -178,7 +178,7 @@ Prerelease bumps need `--preid` unless the current version already carries one t
 | ---------------------------- | -------------------------------------------------------------------------- |
 | `--only <steps>`             | Run only these steps, comma-separated.                                     |
 | `--skip <steps>`             | Run every step except these.                                               |
-| `--commit`                   | Add the opt-in `commit` step: commit a dirty tree with a drafted message.  |
+| `--commit`                   | Force the `commit` step on when a `steps` config removed it.               |
 | `--dry-run`                  | Print every step, execute nothing. Preflight still runs and still reports. |
 | `--yes`, `-y`                | Skip the confirmation prompt.                                              |
 | `--preid <id>`               | Prerelease identifier: `alpha`, `beta`, `rc`, `next`, `nightly`, `canary`. |
@@ -196,7 +196,7 @@ them execute, it never reorders them.
 
 | Step        | Default | What it does                                                                                    |
 | ----------- | ------- | ----------------------------------------------------------------------------------------------- |
-| `commit`    | off     | Commit a dirty working tree with a drafted message ([assistant](#-assistant-optional) required) |
+| `commit`    | on\*    | Commit a dirty working tree with a drafted message ([assistant](#-assistant-optional) required) |
 | `version`   | on      | Write the version into `package.json` and `versionFiles`                                        |
 | `changelog` | on      | Roll `[Unreleased]` into the version, or add drafted notes                                      |
 | `tag`       | on      | Annotated git tag carrying the release notes                                                    |
@@ -204,19 +204,25 @@ them execute, it never reorders them.
 | `publish`   | on      | Run the configured `publish` command                                                            |
 | `release`   | on      | Create the GitHub release                                                                       |
 
+\* `commit` is a conditional default: it no-ops on a clean tree, and on a dirty tree it
+proceeds only when a drafting [assistant](#-assistant-optional) is configured — without
+one, preflight still refuses the unclean tree (with a hint), exactly as before. So
+`release-kit auto --assistant auto` releases a dirty tree end to end: stage, drafted
+commit, then the rest of the pipeline. Opt out with `--skip commit` or a `steps` config.
+
 `version` and `changelog` write files; those writes are persisted by a release commit made
 automatically when either step runs.
 
 ```sh
 release-kit minor --skip publish            # everything but publish
 release-kit --only tag,push,release         # a version already committed elsewhere
-release-kit minor --commit                  # add the opt-in commit step
+release-kit minor --skip commit             # never touch uncommitted work
 ```
 
 Or fix it per project, and just run `release-kit minor`:
 
 ```json
-{ "steps": ["commit", "version", "changelog", "tag", "push", "release"] }
+{ "steps": ["version", "changelog", "tag", "push", "release"] }
 ```
 
 `steps` decides **what** runs. Every other key describes **how** a step behaves — `publish`
@@ -584,8 +590,9 @@ downgrade, so a configured pipeline fails loudly; `"auto"` degrades quietly by d
 
 ### What it does
 
-- **`--commit`** stages the working tree, drafts a Conventional Commits message for the
-  staged diff, and commits — instead of refusing to release. The subject is validated
+- **A dirty working tree is committed instead of refusing to release.** The tree is
+  staged, a Conventional Commits message is drafted for the staged diff, and the commit is
+  made — by default, whenever an assistant is configured (`--skip commit` opts out). The subject is validated
   against the Conventional Commits grammar; an answer that does not parse is rejected rather
   than committed. Attribution lines (`Co-Authored-By`, `Generated with`) are stripped, so
   the tool never signs your commits.

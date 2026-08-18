@@ -100,8 +100,12 @@ import { createInterface } from 'node:readline/promises'
  */
 const STEPS = ['commit', 'version', 'changelog', 'tag', 'push', 'publish', 'release']
 
-/** Everything but `commit`, which is opt-in because it commits work you did not stage. */
-const DEFAULT_STEPS = STEPS.filter((name) => name !== 'commit')
+/**
+ * All seven. `commit` is a conditional default: it no-ops on a clean tree, and on a dirty
+ * tree it proceeds only when a drafting assistant is configured — otherwise preflight
+ * still refuses the unclean tree. Opt out with `--skip commit` or a `steps` config.
+ */
+const DEFAULT_STEPS = [...STEPS]
 
 const DEFAULTS = {
   steps: DEFAULT_STEPS,
@@ -160,7 +164,8 @@ Steps, in the fixed order they run. All but "commit" run by default:
 Flags:
   --only <steps>       run only these steps, comma-separated
   --skip <steps>       run every step except these
-  --commit             add the opt-in commit step: commit a dirty working tree with a
+  --commit             force the commit step on when a steps config removed it:
+                       commit a dirty working tree with a
                        drafted Conventional Commits message instead of refusing to release
   --preid <id>         prerelease identifier (alpha, beta, rc, next, nightly, canary)
   --dist-tag <name>    override the npm dist-tag (default: derived from the version)
@@ -1191,17 +1196,26 @@ const VALUE_OPTIONS = new Set([
   '--assistant-effort',
 ])
 
-/** The version or bump target: the first argument that is neither a flag nor a flag's value. */
-const target = (() => {
-  for (let i = 0; i < argv.length; i += 1) {
-    if (VALUE_OPTIONS.has(argv[i])) {
-      i += 1
-      continue
-    }
-    if (!argv[i].startsWith('-')) return argv[i]
+/** The version or bump target: the only argument that is neither a flag nor a flag's value. */
+const positionals = []
+for (let i = 0; i < argv.length; i += 1) {
+  if (VALUE_OPTIONS.has(argv[i])) {
+    i += 1
+    continue
   }
-  return undefined
-})()
+  if (!argv[i].startsWith('-')) positionals.push(argv[i])
+}
+const target = positionals[0]
+// A second positional is always a mistake, and silently ignoring it changes the release
+// that runs — `release-kit auto assistant auto` must not quietly mean `release-kit auto`.
+if (positionals.length > 1) {
+  const extras = positionals.slice(1)
+  const flagLike = extras.find((arg) => VALUE_OPTIONS.has(`--${arg}`))
+  const hint = flagLike
+    ? `\n  Flags are spelled with dashes: --${flagLike} ${extras[extras.indexOf(flagLike) + 1] ?? '<value>'}`
+    : ''
+  abort(`unexpected argument${extras.length > 1 ? 's' : ''}: ${extras.join(' ')}${hint}`)
+}
 
 // ─────────────────────────────────────────────────────────────────────────────
 // SETUP
@@ -1233,7 +1247,8 @@ if (unknownKeys.length) abort(`release.config.json has unknown keys: ${unknownKe
 
 /**
  * Which steps run: config provides the baseline, --only replaces it, --skip subtracts, and
- * --commit adds the opt-in step. Unknown names are an error rather than a silent no-op.
+ * --commit forces the step on when a steps config removed it. Unknown names are an
+ * error rather than a silent no-op.
  */
 const parseStepList = (value) =>
   value
@@ -1558,7 +1573,7 @@ if (bumping && compareVersions(version, currentVersion) <= 0) {
 
 const dirty = tryRead('git', ['status', '--porcelain'])
 if (dirty === null) fail('could not read git status')
-else if (dirty && runs('commit')) {
+else if (dirty && runs('commit') && assistant) {
   const entries = dirty.split('\n')
   ok(`working tree has ${entries.length} change(s) — will be committed first`)
   console.log(dim(indent(formatStatus(dirty))))
@@ -1577,16 +1592,17 @@ else if (dirty && runs('commit')) {
         'releasing with --skip commit.',
     )
   }
+} else if (dirty && runs('commit')) {
+  fail(
+    `working tree is not clean:\n${indent(formatStatus(dirty))}\n` +
+      '       Configure a drafting assistant (`--assistant auto`, or "assistant" in ' +
+      'release.config.json) to have these committed automatically, or commit them yourself.',
+  )
 } else if (dirty) {
   fail(`working tree is not clean:\n${indent(formatStatus(dirty))}`)
 } else ok('working tree clean')
 
-if (runs('commit') && !assistant) {
-  fail(
-    'the commit step needs a drafting assistant to write the message. Configure one with ' +
-      '`--assistant auto`, or set "assistant" in release.config.json.',
-  )
-} else if (assistant) {
+if (assistant) {
   const detail = [
     assistantModel && `model ${assistantModel}`,
     assistantEffort && `effort ${assistantEffort}`,
@@ -1908,7 +1924,7 @@ if (dirty && runs('commit') && !dryRun) {
     mutate('git', ['reset', '--quiet'])
     abort(
       `${assistantName} could not draft a Conventional Commits message for these changes.\n\n` +
-        '  Commit them yourself and re-run, or run without --commit.',
+        '  Commit them yourself and re-run, or release with --skip commit.',
     )
   }
   console.log(indent(commitMessage))
