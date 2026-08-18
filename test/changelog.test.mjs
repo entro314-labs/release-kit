@@ -82,3 +82,54 @@ describe('insertChangelogSection', () => {
     )
   })
 })
+
+describe('section placement', () => {
+  it('places a release above the first older version, not blindly at the top', () => {
+    // Inserting at the top is correct only while the file is already newest-first. This is
+    // the bug that put a released 2.5.0 between 2.3.3 and 2.4.0 in this project's own
+    // changelog, and made every subsequent release worse.
+    const out = kit.insertChangelogSection(
+      '# Changelog\n\n## [2.4.0]\n\n- newer.\n\n## [2.3.3]\n\n- older.\n',
+      '2.3.5',
+      '2026-08-18',
+      '- middle.',
+    )
+    assert.deepEqual(
+      out.split('\n').filter((l) => l.startsWith('## ')),
+      ['## [2.4.0]', '## [2.3.5] - 2026-08-18', '## [2.3.3]'],
+    )
+  })
+
+  it('appends when the new version is the oldest', () => {
+    const out = kit.insertChangelogSection(
+      '# Changelog\n\n## [2.0.0]\n\n- x.\n',
+      '1.0.0',
+      '2026-01-01',
+      '- first.',
+    )
+    assert.deepEqual(
+      out.split('\n').filter((l) => l.startsWith('## ')),
+      ['## [2.0.0]', '## [1.0.0] - 2026-01-01'],
+    )
+  })
+
+  it('lifts a misplaced [Unreleased] to the top instead of rolling in place', () => {
+    const broken =
+      '# Changelog\n\n## [2.3.3]\n\n- old.\n\n## [Unreleased]\n\n- new work.\n\n## [2.4.0]\n\n- newer.\n'
+    const out = kit.rollUnreleased(broken, '2.5.0', '2026-08-18')
+    const headings = out.split('\n').filter((l) => l.startsWith('## '))
+    assert.equal(headings[0], '## [Unreleased]')
+    assert.equal(headings[1], '## [2.5.0] - 2026-08-18')
+    assert.equal(kit.changelogSection(out, '2.5.0'), '- new work.')
+  })
+})
+
+describe('changelogOutOfOrder', () => {
+  it('says nothing about a newest-first file', () => {
+    assert.deepEqual(kit.changelogOutOfOrder('## [2.5.0]\n## [2.4.0]\n## [2.3.3]\n'), [])
+  })
+
+  it('names the versions sitting above a newer one', () => {
+    assert.deepEqual(kit.changelogOutOfOrder('## [2.3.3]\n## [2.4.0]\n## [2.3.2]\n'), ['2.4.0'])
+  })
+})

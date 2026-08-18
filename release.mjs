@@ -888,8 +888,50 @@ function changelogSection(text, version) {
 }
 
 /**
- * Rewrite a `## [Unreleased]` heading as the released version, and open a fresh
- * `## [Unreleased]` above it for the next cycle.
+ * Version sections that sit above a newer one.
+ *
+ * Placement only keeps a changelog tidy going forward; a file already out of order stays
+ * that way, and its disorder is invisible until a release lands somewhere surprising.
+ *
+ * @returns {string[]} the versions found out of order, newest-first order being expected
+ */
+function changelogOutOfOrder(text) {
+  const versions = [...text.matchAll(/^## \[?v?(\d+\.\d+\.\d+(?:-[\w.]+)?)\]?/gm)].map((m) => m[1])
+  return versions.filter((v, i) => i > 0 && compareVersions(versions[i - 1], v) < 0)
+}
+
+/** The `## ` heading offsets in a changelog, in file order. */
+const sectionOffsets = (text) => [...text.matchAll(/^## .*$/gm)].map((m) => m.index)
+
+/**
+ * Place a version's section where it belongs: above the first section whose version is
+ * lower, rather than wherever the file happens to start.
+ *
+ * Blindly inserting at the top is correct only while the file is already newest-first. A
+ * changelog that drifts out of order once then stays that way, and every release makes it
+ * worse — which is how a released version ends up sitting between two older ones.
+ */
+function insertChangelogSection(text, version, date, body) {
+  const entry = `## [${version}] - ${date}\n\n${body}\n`
+  for (const offset of sectionOffsets(text)) {
+    const heading = /^## \[?v?([\d.]+(?:-[\w.]+)?)\]?/m.exec(
+      text.slice(offset, text.indexOf('\n', offset)),
+    )
+    // An [Unreleased] heading has no version and always stays above the releases.
+    if (!heading) continue
+    if (compareVersions(version, heading[1]) > 0) {
+      return `${text.slice(0, offset)}${entry}\n${text.slice(offset)}`
+    }
+  }
+  const trimmed = text.trimEnd()
+  return `${trimmed}\n\n${entry}`
+}
+
+/**
+ * Promote `## [Unreleased]` to a released version and reopen an empty one above it.
+ *
+ * The section is lifted out and re-placed in version order, so a misplaced `[Unreleased]`
+ * does not drag the new release into the middle of the file with it.
  *
  * @returns {string | null} the updated document, or null when there is nothing to roll
  */
@@ -903,23 +945,18 @@ function rollUnreleased(text, version, date) {
   if (!match) return null
 
   // An empty [Unreleased] has nothing to promote; rolling it produces an empty section.
-  const rest = text.slice(match.index + match[0].length)
-  const next = /^## /m.exec(rest)
-  const body = (next ? rest.slice(0, next.index) : rest).trim()
+  const after = text.slice(match.index + match[0].length)
+  const next = /^## /m.exec(after)
+  const body = (next ? after.slice(0, next.index) : after).trim()
   if (!body) return null
-  const released = `## [Unreleased]\n\n## [${version}] - ${date}`
-  return text.slice(0, match.index) + released + text.slice(match.index + match[0].length)
-}
 
-/**
- * Insert a section for a version above the newest existing one, so drafted notes are kept
- * in the changelog rather than only reaching the tag and the GitHub release.
- */
-function insertChangelogSection(text, version, date, body) {
-  const entry = `## [${version}] - ${date}\n\n${body}\n`
-  const firstSection = /^## /m.exec(text)
-  if (!firstSection) return `${text.trimEnd()}\n\n${entry}`
-  return `${text.slice(0, firstSection.index)}${entry}\n${text.slice(firstSection.index)}`
+  // Remove the section wherever it sits, then place the release by version.
+  const withoutUnreleased = text.slice(0, match.index) + (next ? after.slice(next.index) : '')
+  const placed = insertChangelogSection(withoutUnreleased.trimEnd() + '\n', version, date, body)
+
+  // A fresh [Unreleased] belongs above every release, whatever the file looked like before.
+  const first = sectionOffsets(placed)[0] ?? placed.length
+  return `${placed.slice(0, first)}## [Unreleased]\n\n${placed.slice(first)}`
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -1682,6 +1719,18 @@ if (!publishCommand) {
   }
 }
 
+/** Say so when the changelog is not newest-first, since placement cannot repair it. */
+function reportChangelogOrder(text) {
+  const misplaced = changelogOutOfOrder(text)
+  if (misplaced.length) {
+    warn(
+      `${config.changelog} is not in newest-first order (${misplaced.slice(0, 3).join(', ')}` +
+        `${misplaced.length > 3 ? ', …' : ''} sit above a newer version).\n` +
+        '       New sections are placed correctly, but the existing order is left alone.',
+    )
+  }
+}
+
 // Notes: the changelog section for this version, else a draft, else GitHub generates them.
 let notes = null
 let rolledChangelog = null
@@ -1730,11 +1779,13 @@ if (config.changelog && existsSync(config.changelog)) {
   notes = changelogSection(text, version)
   if (notes) {
     ok(`${config.changelog} has a ${version} section`)
+    reportChangelogOrder(text)
   } else {
     rolledChangelog = rollUnreleased(text, version, new Date().toISOString().slice(0, 10))
     if (rolledChangelog) {
       notes = changelogSection(rolledChangelog, version)
       ok(`${config.changelog}: [Unreleased] will become [${version}]`)
+      reportChangelogOrder(text)
     } else {
       draftedNotes = notesDeferred ? null : draftNotesFor(version)
       if (notesDeferred) {

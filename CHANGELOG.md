@@ -4,6 +4,19 @@ All notable changes to @entro314labs/release-kit.
 
 ## [Unreleased]
 
+### Fixed
+
+- **Sections are placed by version, not by position.** A release was inserted above the
+  first heading in the file and `[Unreleased]` was rolled where it stood, both of which are
+  only correct while the changelog is already newest-first. Once a file drifted out of
+  order it stayed that way and every release made it worse — which is how a released 2.5.0
+  ended up between 2.3.3 and 2.4.0 in this project's own changelog. A misplaced
+  `[Unreleased]` is now lifted back to the top rather than dragging the release into the
+  middle of the file with it.
+- **A changelog that is not newest-first is reported.** Placement keeps a file tidy going
+  forward but cannot repair existing disorder, and that disorder is otherwise invisible
+  until a release lands somewhere surprising.
+
 ### Added
 
 - **A count of commits that will not appear in the notes.** Notes are built from

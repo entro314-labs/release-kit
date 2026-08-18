@@ -32,7 +32,7 @@ export const kit = await import(
     `${source.slice(0, seamAt)}
 export {
   parseVersion, compareVersions, incrementVersion, preidOf, distTagFor,
-  changelogSection, rollUnreleased, insertChangelogSection,
+  changelogSection, rollUnreleased, insertChangelogSection, changelogOutOfOrder,
   parseCommit, inferBump, changelogFromCommits, withoutRevertedCommits,
   cleanDraft, cleanNotes, linkCitedCommits, CONVENTIONAL_RE, CHANGELOG_SECTIONS, HOSTS,
   readVersionFrom, writeVersionInto, versionSource, patternFor,
