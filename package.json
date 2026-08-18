@@ -1,6 +1,6 @@
 {
   "name": "@entro314labs/release-kit",
-  "version": "2.5.0",
+  "version": "2.6.0",
   "description": "Single-file, zero-dependency release mechanism for JS/TS/Node projects: version bump, changelog roll, commit, annotated tag, push, publish, GitHub release",
   "keywords": [
     "changelog",

@@ -4,6 +4,8 @@ All notable changes to @entro314labs/release-kit.
 
 ## [Unreleased]
 
+## [2.6.0] - 2026-08-18
+
 ### Fixed
 
 - **Sections are placed by version, not by position.** A release was inserted above the
