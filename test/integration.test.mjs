@@ -199,3 +199,19 @@ describe('repositories that version by tag alone', () => {
     assert.match(stdout, /nothing to bump from/)
   })
 })
+
+describe('commits that will not appear in the notes', () => {
+  it('says how many are not Conventional Commits', () => {
+    // A squash-merge takes its subject from the PR title, which is where this usually goes
+    // wrong — and silently, because the release still succeeds.
+    const repo = makeRepo({ config: { publish: null, steps: ['version', 'tag', 'push'] } })
+    execFileSync('git', ['tag', '-a', 'v1.0.0', '-m', 'base'], { cwd: repo.root })
+    for (const message of ['feat: a proper one', 'updated some stuff', 'fixed the thing']) {
+      writeFileSync(join(repo.root, 'f.txt'), message)
+      execFileSync('git', ['add', '-A'], { cwd: repo.root })
+      execFileSync('git', ['commit', '-qm', message], { cwd: repo.root })
+    }
+    const { stdout } = release(repo, ['auto', '--yes', '--dry-run'])
+    assert.match(stdout, /2 of 3 commit\(s\) are not Conventional Commits/)
+  })
+})

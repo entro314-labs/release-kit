@@ -430,6 +430,18 @@ re-deriving it: `version`, `tag`, `name`, `dist-tag`, `steps`, `published`, `rel
 Nothing is written on a dry run, and an unwritable `$GITHUB_OUTPUT` never fails a release
 that already completed.
 
+Two upstream habits make commit-derived notes trustworthy, and neither is release-kit's job:
+
+- **Gate the release on CI, and guard against forks.** Trigger on `workflow_run` after your
+  check workflow succeeds, with `if: github.repository_owner == 'your-org'` so a fork never
+  tries to release.
+- **Validate pull request titles.** A squash-merge takes its subject from the PR title, so
+  that title becomes the commit the notes are built from.
+  [`amannn/action-semantic-pull-request`](https://github.com/amannn/action-semantic-pull-request)
+  enforces it. Without something like it, work silently goes missing from release notes —
+  release-kit says how many commits are not Conventional Commits, but it cannot fix them
+  after the fact.
+
 Three things CI does that are worth knowing about:
 
 - **`fetch-depth: 0`.** The default checkout is a shallow clone, which hides the history

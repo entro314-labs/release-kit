@@ -1668,6 +1668,17 @@ const notesDeferred = !!(dirty && runs('commit') && assistant)
 function draftNotesFor(v) {
   const { lastTag, subjects, commits } = commitsSinceLastTag()
   if (!commits.length) return null
+
+  // Notes are built from Conventional Commits, so anything not written that way is simply
+  // absent from them. A squash-merge takes its subject from the pull request title, which
+  // is where this usually goes wrong — and silently, since the release still succeeds.
+  const unconventional = commits.filter((c) => !parseCommit(c.subject, c.body, c.hash)).length
+  if (unconventional) {
+    warn(
+      `${unconventional} of ${commits.length} commit(s) are not Conventional Commits, so they ` +
+        'will not appear in the notes.',
+    )
+  }
   if (!assistant) return changelogFromCommits(commits, remoteLinks(config.remote))
   if (shallow) {
     warn(
