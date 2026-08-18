@@ -2,31 +2,26 @@
 
 All notable changes to @entro314labs/release-kit.
 
+## [Unreleased]
+
+### Added
+
+- **A count of commits that will not appear in the notes.** Notes are built from
+  Conventional Commits, so anything written another way is simply absent — and the release
+  still succeeds, so nobody notices. A squash-merge takes its subject from the pull request
+  title, which is where this usually goes wrong.
+- **Drafted release notes link to their commits.** The deterministic notes already did; the
+  assistant's did not. It is now given the short hashes and asked to cite the ones each
+  bullet covers, and every citation is checked against the commits that actually exist —
+  models invent plausible-looking hashes, and a link to a commit that is not there is worse
+  than no link, so unrecognised ones are removed.
+
 ## [2.5.0] - 2026-08-18
 
 ### Features
 
 - **version:** read the current version from the latest tag when there is no file ([3871709](https://github.com/entro314-labs/release-kit/commit/3871709))
 - **notes:** collect unanticipated commit types instead of dropping them ([28b2cd1](https://github.com/entro314-labs/release-kit/commit/28b2cd1))
-
-## [2.3.3] - 2026-08-17
-
-### Added
-
-- `notesFile` option to write the generated release notes to a file, so build tools can pick them up when they own the artifacts and the GitHub release.
-
-### Changed
-
-- Generated release notes now link commit hashes and issue references using the detected forge's URL format, use the `BREAKING CHANGE` footer text in place of the commit subject when present, and exclude commits that were reverted within the same release.
-
-### Fixed
-
-- Publishing now uses the command matching the detected manifest (`npm` for `package.json`, `cargo` for `Cargo.toml`, none otherwise) instead of always running `npm publish`, so zero-config releases of non-Node projects no longer attempt an npm publish.
-- The drafted commit message is shown before the confirmation prompt, and declining now restores the index.
-- A change set spanning more than two top-level paths is called out before committing, since one commit gets one subject.
-- `--sync` no longer requires a `package.json`, so non-Node projects can vendor the script.
-
-## [Unreleased]
 
 ## [2.4.0] - 2026-08-18
 
@@ -61,6 +56,23 @@ All notable changes to @entro314labs/release-kit.
 
 - **`writeVersionInto` takes `dryRun` as a parameter** rather than reading a module-level
   flag declared further down the file. Writing the tests surfaced the dependency.
+
+## [2.3.3] - 2026-08-17
+
+### Added
+
+- `notesFile` option to write the generated release notes to a file, so build tools can pick them up when they own the artifacts and the GitHub release.
+
+### Changed
+
+- Generated release notes now link commit hashes and issue references using the detected forge's URL format, use the `BREAKING CHANGE` footer text in place of the commit subject when present, and exclude commits that were reverted within the same release.
+
+### Fixed
+
+- Publishing now uses the command matching the detected manifest (`npm` for `package.json`, `cargo` for `Cargo.toml`, none otherwise) instead of always running `npm publish`, so zero-config releases of non-Node projects no longer attempt an npm publish.
+- The drafted commit message is shown before the confirmation prompt, and declining now restores the index.
+- A change set spanning more than two top-level paths is called out before committing, since one commit gets one subject.
+- `--sync` no longer requires a `package.json`, so non-Node projects can vendor the script.
 
 ## [2.3.2] - 2026-08-17
 
