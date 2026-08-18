@@ -342,6 +342,11 @@ the version. Only the version itself is rewritten, so comments and formatting su
 because the TOML match is anchored to the start of a line, a dependency's
 `serde = { version = "1.0" }` is left alone.
 
+**Lockfiles are scoped automatically.** A `Cargo.lock` records a version for every
+dependency — hundreds of them — so matching the first `version = "…"` would rewrite an
+unrelated crate. Listing one rewrites only the `[[package]]` block whose name matches the
+crate in the sibling `Cargo.toml`; with no sibling to read, it refuses rather than guesses.
+
 For anything else, give a pattern with one capture group around the version. `versionFiles`
 takes the same entries, so several files stay in sync across formats:
 
@@ -351,6 +356,29 @@ takes the same entries, so several files stay in sync across formats:
   "versionFiles": [{ "path": "Chart.yaml", "pattern": "^version: (.+)$" }]
 }
 ```
+
+A desktop app usually carries the same version in a lot of places at once — a workspace
+manifest, per-platform bundle configs, a crate manifest and its lockfile. They stay in step
+in one release, across three formats, with no scripting:
+
+```json
+{
+  "versionFiles": [
+    "apps/desktop/package.json",
+    "apps/desktop/src-tauri/tauri.conf.json",
+    "apps/desktop/src-tauri/tauri.macos.conf.json",
+    "apps/desktop/src-tauri/tauri.windows.conf.json",
+    "apps/desktop/src-tauri/tauri.linux.conf.json",
+    "apps/desktop/src-tauri/Cargo.toml",
+    "apps/desktop/src-tauri/Cargo.lock"
+  ],
+  "publish": null,
+  "steps": ["version", "changelog", "tag", "push"]
+}
+```
+
+Stopping at `push` because the tag is what triggers the build pipeline — see
+[Libraries versus apps](#-libraries-versus-apps).
 
 The project name comes from the manifest when there is one (`name` in `package.json`,
 `Cargo.toml` or `pyproject.toml`), and falls back to the repository directory.

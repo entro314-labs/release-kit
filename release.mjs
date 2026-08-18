@@ -41,7 +41,7 @@ import {
   writeFileSync,
 } from 'node:fs'
 import { homedir, tmpdir } from 'node:os'
-import { basename, join, relative, resolve, sep } from 'node:path'
+import { basename, dirname, join, relative, resolve, sep } from 'node:path'
 import { createInterface } from 'node:readline/promises'
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -919,9 +919,29 @@ function readNameFrom(entry) {
 /** Normalise a versionFile / versionFiles entry to { path, pattern }. */
 const versionSource = (entry) => (typeof entry === 'string' ? { path: entry } : entry)
 
+/**
+ * A lockfile records a version for every dependency — hundreds of them — so the first
+ * `version = "…"` in the file belongs to whichever crate sorts first, not to this project.
+ * Rewriting it corrupts an unrelated dependency, silently. Scope to the named package block.
+ */
+function cargoLockPattern(lockPath) {
+  const sibling = join(dirname(lockPath), 'Cargo.toml')
+  const crate = existsSync(sibling) ? readNameFrom({ path: sibling }) : null
+  if (!crate) {
+    throw new Error(
+      `${lockPath} lists every dependency's version, so it needs to know which package is ` +
+        `yours.\n  No Cargo.toml beside it to read the name from — give an explicit ` +
+        `pattern:\n  { "path": "${lockPath}", "pattern": "name = \\"<crate>\\"\\nversion = ` +
+        `\\"(.+)\\"" }`,
+    )
+  }
+  return new RegExp(`\\[\\[package\\]\\]\\nname = "${escapeRe(crate)}"\\nversion = "([^"]*)"`)
+}
+
 /** The regex for a source, or null when the whole file is the version. */
 function patternFor({ path, pattern }) {
   if (pattern) return new RegExp(pattern, 'm')
+  if (basename(path) === 'Cargo.lock') return cargoLockPattern(path)
   if (path.endsWith('.json')) return VERSION_PATTERNS.json
   if (path.endsWith('.toml')) return VERSION_PATTERNS.toml
   return null
