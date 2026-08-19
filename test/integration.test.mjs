@@ -64,7 +64,9 @@ describe('preflight', () => {
     const repo = makeRepo()
     writeFileSync(join(repo.root, 'junk.txt'), 'x')
     execFileSync('git', ['checkout', '-q', '-b', 'feature'], { cwd: repo.root })
-    const { status, stdout } = release(repo, ['0.5.0', '--yes'], { GH_AUTHED: '1' })
+    const { status, stdout } = release(repo, ['0.5.0', '--yes', '--skip', 'commit'], {
+      GH_AUTHED: '1',
+    })
     assert.equal(status, 1)
     for (const expected of [
       /not greater than/,
@@ -84,13 +86,26 @@ describe('preflight', () => {
     assert.match(stdout, /--assistant auto/)
   })
 
-  it('refuses a dirty tree without an assistant, hinting that one would commit it', () => {
+  it('commits a dirty tree without an assistant, using a generated message', () => {
     const repo = makeRepo()
     writeFileSync(join(repo.root, 'junk.txt'), 'x')
-    const { status, stdout } = release(repo, ['0.5.0', '--yes'], { GH_AUTHED: '1' })
+    const { status, stdout } = release(repo, ['minor', '--yes'])
+    assert.equal(status, 0, stdout)
+    assert.match(stdout, /will be committed first/)
+    assert.match(stdout, /no assistant configured/)
+    const subjects = execFileSync('git', ['log', '--format=%s'], {
+      cwd: repo.root,
+      encoding: 'utf8',
+    })
+    assert.match(subjects, /^chore: update junk\.txt$/m)
+  })
+
+  it('still refuses a dirty tree when the commit step is skipped', () => {
+    const repo = makeRepo()
+    writeFileSync(join(repo.root, 'junk.txt'), 'x')
+    const { status, stdout } = release(repo, ['minor', '--yes', '--skip', 'commit'])
     assert.equal(status, 1)
     assert.match(stdout, /working tree is not clean/)
-    assert.match(stdout, /assistant/)
   })
 
   it('runs the configured verify command and fails preflight when it fails', () => {

@@ -194,21 +194,22 @@ Prerelease bumps need `--preid` unless the current version already carries one t
 A release is seven named steps. They always run in this order — `steps` selects which of
 them execute, it never reorders them.
 
-| Step        | Default | What it does                                                                                    |
-| ----------- | ------- | ----------------------------------------------------------------------------------------------- |
-| `commit`    | on\*    | Commit a dirty working tree with a drafted message ([assistant](#-assistant-optional) required) |
-| `version`   | on      | Write the version into `package.json` and `versionFiles`                                        |
-| `changelog` | on      | Roll `[Unreleased]` into the version, or add drafted notes                                      |
-| `tag`       | on      | Annotated git tag carrying the release notes                                                    |
-| `push`      | on      | Push the branch and tag together (`--follow-tags`)                                              |
-| `publish`   | on      | Run the configured `publish` command                                                            |
-| `release`   | on      | Create the GitHub release                                                                       |
+| Step        | Default | What it does                                                                                       |
+| ----------- | ------- | -------------------------------------------------------------------------------------------------- |
+| `commit`    | on\*    | Commit a dirty working tree — drafted with an [assistant](#-assistant-optional), generated without |
+| `version`   | on      | Write the version into `package.json` and `versionFiles`                                           |
+| `changelog` | on      | Roll `[Unreleased]` into the version, or add drafted notes                                         |
+| `tag`       | on      | Annotated git tag carrying the release notes                                                       |
+| `push`      | on      | Push the branch and tag together (`--follow-tags`)                                                 |
+| `publish`   | on      | Run the configured `publish` command                                                               |
+| `release`   | on      | Create the GitHub release                                                                          |
 
-\* `commit` is a conditional default: it no-ops on a clean tree, and on a dirty tree it
-proceeds only when a drafting [assistant](#-assistant-optional) is configured — without
-one, preflight still refuses the unclean tree (with a hint), exactly as before. So
-`release-kit auto --assistant auto` releases a dirty tree end to end: stage, drafted
-commit, then the rest of the pipeline. Opt out with `--skip commit` or a `steps` config.
+\* `commit` no-ops on a clean tree. On a dirty tree it stages everything and commits:
+with an [assistant](#-assistant-optional) configured the message is drafted from the
+diff; without one it degrades gracefully to a generated `chore:` message naming the
+changed files — a release is never blocked because a text generator was unavailable.
+Opt out with `--skip commit` or a `steps` config, which restores the refusal on a dirty
+tree.
 
 `version` and `changelog` write files; those writes are persisted by a release commit made
 automatically when either step runs.
@@ -598,15 +599,13 @@ downgrade, so a configured pipeline fails loudly; `"auto"` degrades quietly by d
 
 ### What it does
 
-- **A dirty working tree is committed instead of refusing to release.** The tree is
-  staged, a Conventional Commits message is drafted for the staged diff, and the commit is
-  made — by default, whenever an assistant is configured (`--skip commit` opts out).
-  The draft is validated, not trusted: a subject that is not Conventional Commits, or a
-  message naming a version the staged changes never touch (a model narrating an unchanged
-  `"version"` context line), is rejected rather than committed. The subject is validated
-  against the Conventional Commits grammar; an answer that does not parse is rejected rather
-  than committed. Attribution lines (`Co-Authored-By`, `Generated with`) are stripped, so
-  the tool never signs your commits.
+- **Commit messages for a dirty working tree are drafted from the staged diff**, instead
+  of the generated `chore:` message used when no assistant is available. The draft is
+  validated, not trusted: a subject that is not Conventional Commits, or a message naming
+  a version the staged changes never touch (a model narrating an unchanged `"version"`
+  context line), falls back to the generated message rather than being committed.
+  Attribution lines (`Co-Authored-By`, `Generated with`) are stripped, so the tool never
+  signs your commits.
 - **Release notes** are drafted from the commits since the last tag when `CHANGELOG.md` has
   no section for the version. Each bullet ends with a link to the commits it covers: the
   assistant is given the short hashes and asked to cite them, and every citation is checked

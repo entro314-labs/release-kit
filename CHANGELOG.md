@@ -4,6 +4,17 @@ All notable changes to @entro314labs/release-kit.
 
 ## [Unreleased]
 
+### Changed
+
+- **A dirty tree without an assistant is committed with a generated message instead of
+  refusing.** The default commit step required a drafting assistant, which blocked plain
+  `release-kit auto` on any dirty tree — violating the rule that a release is never
+  blocked because a text generator was unavailable. The deterministic floor is a `chore:`
+  commit naming the changed files (full paths in the body); an assistant upgrades it to a
+  drafted message, and an unusable draft now falls back to the generated one instead of
+  aborting after staging. `--skip commit` still restores the hard refusal, and
+  commit-derived release notes are now generated after the commit so they include it.
+
 ### Added
 
 - **`verify`** — a config key naming the project's own gate (`"verify": "pnpm check"`),

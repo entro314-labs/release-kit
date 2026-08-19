@@ -657,6 +657,22 @@ function normalizeRepoUrl(url) {
     .toLowerCase()
 }
 
+/**
+ * A deterministic Conventional Commits message built from the staged file list — the
+ * floor under the drafting assistant. A release is never blocked because a text
+ * generator was unavailable or produced an unusable answer: the honest fallback is a
+ * chore commit that names what it touches, with the full paths in the body.
+ */
+function fallbackCommitMessage(files) {
+  const named = `chore: update ${files.map((file) => basename(file)).join(' and ')}`
+  const subject =
+    files.length > 0 && files.length <= 2 && named.length <= 72
+      ? named
+      : `chore: update ${files.length} files`
+  const body = files.length > 2 ? files.map((file) => `- ${file}`).join('\n') : ''
+  return body ? `${subject}\n\n${body}` : subject
+}
+
 const CONVENTIONAL_TYPES = 'build|chore|ci|docs|feat|fix|perf|refactor|revert|style|test'
 const CONVENTIONAL_RE = new RegExp(`^(${CONVENTIONAL_TYPES})(\\([^)]+\\))?!?: .+`)
 
@@ -1622,10 +1638,16 @@ if (bumping && compareVersions(version, currentVersion) <= 0) {
 
 const dirty = tryRead('git', ['status', '--porcelain'])
 if (dirty === null) fail('could not read git status')
-else if (dirty && runs('commit') && assistant) {
+else if (dirty && runs('commit')) {
   const entries = dirty.split('\n')
   ok(`working tree has ${entries.length} change(s) — will be committed first`)
   console.log(dim(indent(formatStatus(dirty))))
+  if (!assistant) {
+    note(
+      'no assistant configured: the commit message will name the files — ' +
+        '`--assistant auto` drafts a real one',
+    )
+  }
   // One commit gets one subject. A change set spanning several top-level directories is
   // usually several pieces of work, and no honest Conventional Commits subject covers it.
   const areas = new Set(
@@ -1641,12 +1663,6 @@ else if (dirty && runs('commit') && assistant) {
         'releasing with --skip commit.',
     )
   }
-} else if (dirty && runs('commit')) {
-  fail(
-    `working tree is not clean:\n${indent(formatStatus(dirty))}\n` +
-      '       Configure a drafting assistant (`--assistant auto`, or "assistant" in ' +
-      'release.config.json) to have these committed automatically, or commit them yourself.',
-  )
 } else if (dirty) {
   fail(`working tree is not clean:\n${indent(formatStatus(dirty))}`)
 } else ok('working tree clean')
@@ -1884,7 +1900,7 @@ let draftedNotes = null
  * True when --commit still has to create a commit. Notes drafted before that commit would
  * describe an incomplete release, so drafting waits until the working tree is committed.
  */
-const notesDeferred = !!(dirty && runs('commit') && assistant)
+const notesDeferred = !!(dirty && runs('commit'))
 
 /**
  * Notes for a version, in descending order of how much they can be trusted:
@@ -1950,7 +1966,7 @@ if (notesSource === 'github') {
   // Generate, either because nothing was written or because a source was named.
   if (!notes) {
     if (notesDeferred) {
-      ok('release notes will be drafted after the commit')
+      ok(`release notes will be ${assistant ? 'drafted' : 'generated'} after the commit`)
     } else {
       draftedNotes = draftNotesFor(version)
       if (draftedNotes) {
@@ -2025,13 +2041,16 @@ if (dirty && runs('commit') && !dryRun) {
   step('Stage the working tree')
   mutate('git', ['add', '--all'])
   didStage = true
-  commitMessage = draftCommitMessage()
+  commitMessage = assistant ? draftCommitMessage() : null
   if (!commitMessage) {
-    mutate('git', ['reset', '--quiet'])
-    abort(
-      `${assistantName} could not draft a Conventional Commits message for these changes.\n\n` +
-        '  Commit them yourself and re-run, or release with --skip commit.',
-    )
+    // No assistant, or its draft was unusable: never block on a text generator. The
+    // deterministic floor is a chore commit that names what it touches.
+    if (assistant) {
+      note(`${assistantName} produced no usable message — falling back to a generated one`)
+    }
+    const files =
+      tryRead('git', ['diff', '--cached', '--name-only'])?.split('\n').filter(Boolean) ?? []
+    commitMessage = fallbackCommitMessage(files)
   }
   console.log(indent(commitMessage))
 }

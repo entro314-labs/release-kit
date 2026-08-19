@@ -23,6 +23,33 @@ describe('inventedVersions', () => {
   })
 })
 
+describe('fallbackCommitMessage', () => {
+  it('names one or two files in the subject', () => {
+    assert.equal(kit.fallbackCommitMessage(['junk.txt']), 'chore: update junk.txt')
+    assert.equal(
+      kit.fallbackCommitMessage(['package.json', 'pnpm-lock.yaml']),
+      'chore: update package.json and pnpm-lock.yaml',
+    )
+  })
+
+  it('counts many files and lists their paths in the body', () => {
+    const message = kit.fallbackCommitMessage(['a.js', 'src/b.js', 'test/c.js'])
+    const [subject, blank, ...body] = message.split('\n')
+    assert.equal(subject, 'chore: update 3 files')
+    assert.equal(blank, '')
+    assert.deepEqual(body, ['- a.js', '- src/b.js', '- test/c.js'])
+  })
+
+  it('always yields a valid Conventional Commits subject, even for long names', () => {
+    const long = [`${'x'.repeat(80)}.js`, 'y.js']
+    for (const files of [['a.js'], long, ['a', 'b', 'c', 'd']]) {
+      const [subject] = kit.fallbackCommitMessage(files).split('\n')
+      assert.match(subject, kit.CONVENTIONAL_RE, subject)
+      assert.ok(subject.length <= 72, subject)
+    }
+  })
+})
+
 describe('normalizeRepoUrl', () => {
   it('treats git+, ssh, scp shorthand, .git and case as the same repository', () => {
     const canonical = 'https://github.com/capy-base/sdk-ts'
