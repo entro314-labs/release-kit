@@ -269,6 +269,19 @@ Seeding refuses, per member and without touching it, when:
 The orchestrator's graph is built from npm-style manifests today. Non-npm members still
 participate:
 
+- **Rust**: `Cargo.toml` versions and `cargo publish`, both already handled per package.
+  What the orchestrator would additionally need is the range rewrite: a crate depending on
+  a sibling by `path` also carries a `version` for it, and crates.io rejects a publish
+  whose path dependency has no version — so the dependent's manifest must move to the
+  dependency's new number before it publishes. release-please's `cargo-toml.ts` is the
+  worked reference: it rewrites `version` under `dependencies`, `dev-dependencies`,
+  `build-dependencies` and every `target.<cfg>` table, skipping entries with no `path`
+  (a real crates.io dependency, not a sibling) and no `version` (a path-only dependency,
+  which needs nothing). Workspace inheritance moves the problem rather than removing it:
+  `version.workspace = true` in a member points at `[workspace.package]`, which is one
+  place to rewrite instead of many. Not built in `release.mjs`, where a single package has
+  no internal ranges to rewrite and the code would have no caller.
+
 - **Go**: no manifest version; the tag is the release. release-kit already handles it
   (`versionFile: null`). It has no npm-visible dependents, so no registry wait.
 - **Python / PHP**: `pyproject.toml` / `composer.json` versions, publish via the package's
