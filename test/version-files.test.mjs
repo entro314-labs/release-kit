@@ -90,3 +90,72 @@ describe('Cargo.lock', () => {
     )
   })
 })
+
+describe('a Cargo workspace', () => {
+  const workspace = () => {
+    const root = mkdtempSync(join(tmpdir(), 'release-kit-ws-'))
+    writeFileSync(
+      join(root, 'Cargo.toml'),
+      '[workspace]\nmembers = ["crates/*"]\n\n[workspace.package]\nversion = "1.0.0"\n',
+    )
+    for (const [name, version] of [
+      ['core', '{ workspace = true }'],
+      ['cli', '{ workspace = true }'],
+      // Pinned to its own number: versioned separately, so this bump does not own it.
+      ['detached', '"0.4.2"'],
+    ]) {
+      mkdirSync(join(root, 'crates', name), { recursive: true })
+      writeFileSync(
+        join(root, 'crates', name, 'Cargo.toml'),
+        `[package]\nname = "acme-${name}"\nversion = ${version}\n`,
+      )
+    }
+    writeFileSync(
+      join(root, 'Cargo.lock'),
+      'version = 3\n\n' +
+        '[[package]]\nname = "acme-core"\nversion = "1.0.0"\n\n' +
+        '[[package]]\nname = "acme-cli"\nversion = "1.0.0"\n\n' +
+        '[[package]]\nname = "acme-detached"\nversion = "0.4.2"\n\n' +
+        '[[package]]\nname = "serde"\nversion = "1.0.219"\n',
+    )
+    return root
+  }
+
+  it('finds the members that inherit the workspace version', () => {
+    assert.deepEqual(kit.workspaceCrates(join(workspace(), 'Cargo.toml')), [
+      'acme-cli',
+      'acme-core',
+    ])
+  })
+
+  it('rewrites every inheriting member in Cargo.lock, and nothing else', () => {
+    const root = workspace()
+    kit.writeVersionInto({ path: join(root, 'Cargo.lock') }, '1.1.0')
+    const lock = readFileSync(join(root, 'Cargo.lock'), 'utf8')
+    assert.match(lock, /name = "acme-core"\nversion = "1\.1\.0"/)
+    assert.match(lock, /name = "acme-cli"\nversion = "1\.1\.0"/)
+    assert.match(lock, /name = "acme-detached"\nversion = "0\.4\.2"/, 'pinned member untouched')
+    assert.match(lock, /name = "serde"\nversion = "1\.0\.219"/, 'dependency untouched')
+  })
+})
+
+describe('expandPaths', () => {
+  it('expands a * within one path segment', () => {
+    const root = mkdtempSync(join(tmpdir(), 'release-kit-glob-'))
+    for (const name of ['alpha', 'beta']) {
+      mkdirSync(join(root, 'apps', name), { recursive: true })
+      writeFileSync(join(root, 'apps', name, 'app.json'), '{}')
+    }
+    assert.deepEqual(kit.expandPaths(join(root, 'apps/*/app.json')), [
+      join(root, 'apps/alpha/app.json'),
+      join(root, 'apps/beta/app.json'),
+    ])
+  })
+
+  it('yields a literal path when it exists, and nothing when it does not', () => {
+    const root = mkdtempSync(join(tmpdir(), 'release-kit-glob-'))
+    writeFileSync(join(root, 'VERSION'), '1.0.0')
+    assert.deepEqual(kit.expandPaths(join(root, 'VERSION')), [join(root, 'VERSION')])
+    assert.deepEqual(kit.expandPaths(join(root, 'nope')), [])
+  })
+})

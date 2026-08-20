@@ -37,7 +37,7 @@ export {
   parseCommit, inferBump, changelogFromCommits, withoutRevertedCommits,
   cleanDraft, cleanNotes, linkCitedCommits, CONVENTIONAL_RE, CHANGELOG_SECTIONS, HOSTS,
   lintSubjects, CHANGELOG_TYPES, KNOWN_TYPES,
-  readVersionFrom, writeVersionInto, versionSource, patternFor,
+  readVersionFrom, writeVersionInto, versionSource, patternFor, expandPaths, workspaceCrates,
   inventedVersions, normalizeRepoUrl, fallbackCommitMessage,
 }`,
   )}`

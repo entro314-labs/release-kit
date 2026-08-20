@@ -37,6 +37,7 @@ import {
   existsSync,
   mkdirSync,
   mkdtempSync,
+  readdirSync,
   readFileSync,
   writeFileSync,
 } from 'node:fs'
@@ -945,6 +946,66 @@ function mutate(command, args, options = {}) {
 }
 
 /**
+ * Lockfiles that record the releasing project's own version, and the command that brings
+ * each back into step.
+ *
+ * A lockfile is not rewritten by pattern like a manifest is: `package-lock.json` carries
+ * the version in two places, `uv.lock` carries it inside the `[[package]]` block for the
+ * project among all its dependencies, and both formats change shape between tool versions.
+ * The tool that owns the file is the only thing that can be trusted to edit it, so each
+ * one is refreshed by running that tool.
+ *
+ * `manifest` scopes the refresh: a polyglot repository can hold a `uv.lock` for a Python
+ * component that this release is not versioning, and regenerating it would put an
+ * unrelated change in the release commit.
+ *
+ * pnpm and Cargo are deliberately absent. `pnpm-lock.yaml` records no root version, so it
+ * never goes stale; `Cargo.lock` does, and is already kept in step as a version file with
+ * a pattern scoped to the crate.
+ */
+const LOCKFILES = [
+  {
+    path: 'package-lock.json',
+    manifest: 'package.json',
+    command: ['npm', ['install', '--package-lock-only', '--ignore-scripts', '--silent']],
+  },
+  {
+    path: 'npm-shrinkwrap.json',
+    manifest: 'package.json',
+    command: ['npm', ['install', '--package-lock-only', '--ignore-scripts', '--silent']],
+  },
+  { path: 'uv.lock', manifest: 'pyproject.toml', command: ['uv', ['lock', '--quiet']] },
+]
+
+/**
+ * Bring every lockfile belonging to a manifest this release wrote back into step.
+ *
+ * A missing tool is a warning rather than an abort: the lockfile is left exactly as stale
+ * as it already was, which is the behaviour without this step at all, and no release
+ * should die because a lock tool is not installed on the machine cutting it.
+ *
+ * @param {string[]} written paths the version step wrote
+ */
+function refreshLockfiles(written) {
+  const done = new Set()
+  for (const { path, manifest, command } of LOCKFILES) {
+    if (!existsSync(path) || !written.includes(manifest)) continue
+    const [tool, args] = command
+    // npm writes whichever of the two lockfiles the project has; running it twice is one
+    // pointless install, not two different edits.
+    if (!done.has(tool)) {
+      if (!dryRun && !succeeds(tool, ['--version'])) {
+        warn(`${path} records the version and ${tool} is not installed — leaving it stale`)
+        continue
+      }
+      mutate(tool, args)
+      done.add(tool)
+    }
+    staged.push(path)
+  }
+}
+
+/**
  * Push the release commit and its tag as one transaction.
  *
  * `--follow-tags` and `--atomic` answer different questions: the first decides *which*
@@ -1322,27 +1383,100 @@ function readNameFrom(entry) {
 const versionSource = (entry) => (typeof entry === 'string' ? { path: entry } : entry)
 
 /**
+ * Expand a path that may contain `*` segments into the paths that exist, in sorted order.
+ *
+ * A desktop app carries the same version in a per-platform config for every platform it
+ * ships, and a Cargo workspace lists its members as `crates/*`. Writing those out one by
+ * one is the config the glob replaces. `*` matches within a single path segment, which is
+ * what both of those shapes need and is all Go's `filepath.Glob` — the shape changie's
+ * `replacements` use — offers either.
+ *
+ * @returns {string[]} matching paths; a pattern with no `*` yields itself when it exists
+ */
+function expandPaths(pattern) {
+  if (!pattern.includes('*')) return existsSync(pattern) ? [pattern] : []
+  const absolute = pattern.startsWith('/')
+  let current = [absolute ? '/' : '.']
+  for (const segment of pattern.split('/').filter(Boolean)) {
+    const next = []
+    if (segment.includes('*')) {
+      const shape = new RegExp(`^${segment.split('*').map(escapeRe).join('[^/]*')}$`)
+      for (const dir of current) {
+        let entries
+        try {
+          entries = readdirSync(dir).sort()
+        } catch {
+          continue
+        }
+        for (const entry of entries) if (shape.test(entry)) next.push(join(dir, entry))
+      }
+    } else {
+      for (const dir of current) {
+        const joined = join(dir, segment)
+        if (existsSync(joined)) next.push(joined)
+      }
+    }
+    current = next
+  }
+  return current
+}
+
+/**
+ * The crates in a Cargo workspace whose version this bump owns: the members that inherit
+ * it with `version.workspace = true`, which is how a workspace keeps its crates in step.
+ *
+ * A member pinning its own number is versioned separately and is left out, the same rule
+ * the companion-manifest detection uses.
+ *
+ * @returns {string[]} crate names
+ */
+function workspaceCrates(manifestPath) {
+  const text = readFileSync(manifestPath, 'utf8')
+  const members = /^members\s*=\s*\[([\s\S]*?)\]/m.exec(text)?.[1]
+  if (!members) return []
+  const root = dirname(manifestPath)
+  const names = []
+  for (const entry of members.matchAll(/"([^"]+)"/g)) {
+    for (const dir of expandPaths(join(root, entry[1]))) {
+      const memberManifest = join(dir, 'Cargo.toml')
+      if (!existsSync(memberManifest)) continue
+      const member = readFileSync(memberManifest, 'utf8')
+      if (!/^version(?:\.workspace)?\s*=\s*\{?\s*workspace\s*=\s*true/m.test(member)) continue
+      const name = NAME_PATTERNS.toml.exec(member)?.[1]
+      if (name) names.push(name)
+    }
+  }
+  return names
+}
+
+/**
  * A lockfile records a version for every dependency — hundreds of them — so the first
  * `version = "…"` in the file belongs to whichever crate sorts first, not to this project.
  * Rewriting it corrupts an unrelated dependency, silently. Scope to the named package block.
  */
 function cargoLockPattern(lockPath) {
   const sibling = join(dirname(lockPath), 'Cargo.toml')
-  const crate = existsSync(sibling) ? readNameFrom({ path: sibling }) : null
-  if (!crate) {
+  // A workspace root carries no `[package]` of its own; what it owns is every member that
+  // inherits the version with `version.workspace = true`, and the lockfile records a
+  // block for each of them.
+  const crates = existsSync(sibling)
+    ? [...new Set([readNameFrom({ path: sibling }), ...workspaceCrates(sibling)].filter(Boolean))]
+    : []
+  if (!crates.length) {
     throw new Error(
       `${lockPath} lists every dependency's version, so it needs to know which package is ` +
-        `yours.\n  No Cargo.toml beside it to read the name from — give an explicit ` +
-        `pattern:\n  { "path": "${lockPath}", "pattern": "name = \\"<crate>\\"\\nversion = ` +
-        `\\"(.+)\\"" }`,
+        `yours.\n  No Cargo.toml beside it naming a crate or a workspace member that ` +
+        `inherits the version — give an explicit pattern:\n  { "path": "${lockPath}", ` +
+        `"pattern": "name = \\"<crate>\\"\\nversion = \\"(.+)\\"" }`,
     )
   }
-  return new RegExp(`\\[\\[package\\]\\]\\nname = "${escapeRe(crate)}"\\nversion = "([^"]*)"`)
+  const names = crates.map(escapeRe).join('|')
+  return new RegExp(`\\[\\[package\\]\\]\\nname = "(?:${names})"\\nversion = "([^"]*)"`, 'g')
 }
 
 /** The regex for a source, or null when the whole file is the version. */
-function patternFor({ path, pattern }) {
-  if (pattern) return new RegExp(pattern, 'm')
+function patternFor({ path, pattern, all = false }) {
+  if (pattern) return new RegExp(pattern, all ? 'mg' : 'm')
   if (basename(path) === 'Cargo.lock') return cargoLockPattern(path)
   if (path.endsWith('.json')) return VERSION_PATTERNS.json
   if (path.endsWith('.toml')) return VERSION_PATTERNS.toml
@@ -1373,10 +1507,14 @@ function writeVersionInto(entry, version, { dryRun = false } = {}) {
 
   let updated
   if (pattern) {
-    const match = pattern.exec(text)
-    if (!match) throw new Error(`${source.path} has no version matching ${pattern}`)
-    const start = match.index + match[0].indexOf(match[1])
-    updated = text.slice(0, start) + version + text.slice(start + match[1].length)
+    if (!pattern.test(text)) throw new Error(`${source.path} has no version matching ${pattern}`)
+    pattern.lastIndex = 0
+    // A global pattern rewrites every match rather than the first: a Cargo.lock records
+    // one block per crate, and a workspace bump owns all the members inheriting from it.
+    updated = text.replace(pattern, (match, captured) => {
+      const at = match.indexOf(captured)
+      return match.slice(0, at) + version + match.slice(at + captured.length)
+    })
   } else {
     updated = `${version}\n`
   }
@@ -1816,7 +1954,24 @@ if (companionFiles.length) {
  * may still have mirrors to write — a Go module's `version.go` is exactly that — so this
  * is what the version step works from, rather than `versionFile` being required.
  */
-const versionTargets = [versionFile, ...config.versionFiles].filter(Boolean).map(versionSource)
+/**
+ * Every file the version is written into, with `*` in a `versionFiles` path expanded to
+ * the files it matches.
+ *
+ * A pattern matching nothing is an error rather than a quiet skip: it was written to keep
+ * files in step, and silently keeping none of them in step is the failure it was meant to
+ * prevent. `versionFile` is never globbed — the source of truth is one file, and a glob
+ * that resolved to two would make which one wins an accident of directory order.
+ */
+const versionTargets = [
+  ...(versionFile ? [versionSource(versionFile)] : []),
+  ...config.versionFiles.map(versionSource).flatMap((source) => {
+    if (!source.path.includes('*')) return [source]
+    const matched = expandPaths(source.path)
+    if (!matched.length) abort(`versionFiles pattern ${source.path} matched no files`)
+    return matched.map((path) => Object.assign({}, source, { path }))
+  }),
+]
 
 // Same rule as versionFile: an explicit `publish: null` means "publish nothing" and is
 // never re-detected. Unset means "work it out", and working it out can yield nothing.
@@ -2610,11 +2765,7 @@ if (bumping) {
       console.log(`  ${dryRun ? yellow('would write') : dim('wrote')} ${source.path}`)
     }
   }
-  // A package-lock.json embeds the root version twice, so it goes stale on a bump.
-  if (existsSync('package-lock.json')) {
-    mutate('npm', ['install', '--package-lock-only', '--ignore-scripts', '--silent'])
-    staged.push('package-lock.json')
-  }
+  refreshLockfiles(versionTargets.map((source) => source.path))
 }
 
 /** The version headings a changelog carries are dead link references without these. */

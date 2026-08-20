@@ -709,3 +709,69 @@ describe('changelog link definitions', () => {
     assert.ok(!/^\[[^\]]+\]: /m.test(changelog), 'no definitions invented from a local path')
   })
 })
+
+describe('lockfiles that record the project version', () => {
+  const lock = (version) =>
+    `{\n  "name": "@scope/demo",\n  "version": "${version}",\n  "lockfileVersion": 3,\n` +
+    `  "packages": {\n    "": {\n      "name": "@scope/demo",\n      "version": "${version}"\n    }\n  }\n}\n`
+
+  it('refreshes npm-shrinkwrap.json, not only package-lock.json', () => {
+    // Both record the root version twice. npm writes whichever the project has.
+    const repo = makeRepo({
+      files: { 'npm-shrinkwrap.json': lock('1.0.0') },
+      config: { publish: null, steps: ['version', 'tag', 'push'] },
+    })
+    const { status, stdout } = release(repo, ['minor', '--yes'])
+    assert.equal(status, 0, stdout)
+    assert.ok(
+      stubCalls(repo).some((c) => c.startsWith('npm install --package-lock-only')),
+      'npm was asked to rewrite the lockfile',
+    )
+  })
+
+  it('leaves a uv.lock alone when the release is not versioning pyproject.toml', () => {
+    // A polyglot repository can hold a lockfile for a component this release does not
+    // version; regenerating it would put an unrelated change in the release commit.
+    const repo = makeRepo({
+      files: { 'uv.lock': 'version = 1\n\n[[package]]\nname = "other"\nversion = "0.1.0"\n' },
+      config: { publish: null, steps: ['version', 'tag', 'push'] },
+    })
+    const { status, stdout } = release(repo, ['minor', '--yes'])
+    assert.equal(status, 0, stdout)
+    assert.equal(
+      readFile(repo, 'uv.lock'),
+      'version = 1\n\n[[package]]\nname = "other"\nversion = "0.1.0"\n',
+    )
+  })
+})
+
+describe('a versionFiles glob', () => {
+  it('bumps every file it matches', () => {
+    // A desktop app carries the same version in a per-platform config for every platform
+    // it ships. Writing them out one by one is the config the glob replaces.
+    const repo = makeRepo({
+      files: {
+        'src-tauri/tauri.macos.conf.json': '{\n  "version": "1.0.0"\n}\n',
+        'src-tauri/tauri.linux.conf.json': '{\n  "version": "1.0.0"\n}\n',
+      },
+      config: {
+        versionFiles: ['src-tauri/tauri.*.conf.json'],
+        publish: null,
+        steps: ['version', 'tag', 'push'],
+      },
+    })
+    const { status, stdout } = release(repo, ['minor', '--yes'])
+    assert.equal(status, 0, stdout)
+    assert.equal(JSON.parse(readFile(repo, 'src-tauri/tauri.macos.conf.json')).version, '1.1.0')
+    assert.equal(JSON.parse(readFile(repo, 'src-tauri/tauri.linux.conf.json')).version, '1.1.0')
+  })
+
+  it('refuses a pattern that matches nothing rather than skipping it silently', () => {
+    const repo = makeRepo({
+      config: { versionFiles: ['configs/*.json'], publish: null, steps: ['version'] },
+    })
+    const { status, stdout } = release(repo, ['minor', '--yes'])
+    assert.equal(status, 1)
+    assert.match(stdout, /matched no files/)
+  })
+})
