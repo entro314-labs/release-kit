@@ -68,13 +68,13 @@ Each registry is a row in `REGISTRIES` declaring how its CLI answers "am I authe
 and "does this version exist". Publishing already works without a row; the row buys the
 early failure and the skip-if-already-published behaviour.
 
-| Target        | Publish                               | Auth                                     | Already published                           |
-| ------------- | ------------------------------------- | ---------------------------------------- | ------------------------------------------- |
-| cargo         | `cargo publish`                       | `CARGO_REGISTRY_TOKEN`, or `cargo login` | crates.io API, or `cargo publish --dry-run` |
-| Python wheels | `uv publish` _(done)_, `twine upload` | `TWINE_API_TOKEN` for twine              | PyPI JSON API                               |
-| RubyGems      | `gem push`                            | `~/.gem/credentials`                     | `gem list --remote --exact`                 |
-| NuGet         | `dotnet nuget push`                   | `--api-key`                              | registry API                                |
-| Docker / OCI  | `docker push`                         | `docker login`                           | manifest inspect                            |
+| Target        | Publish                               | Auth                                     | Already published              |
+| ------------- | ------------------------------------- | ---------------------------------------- | ------------------------------ |
+| cargo         | `cargo publish` _(done)_              | `CARGO_REGISTRY_TOKEN`, or `cargo login` | `cargo info <crate>@<version>` |
+| Python wheels | `uv publish` _(done)_, `twine upload` | `TWINE_API_TOKEN` for twine              | PyPI JSON API                  |
+| RubyGems      | `gem push`                            | `~/.gem/credentials`                     | `gem list --remote --exact`    |
+| NuGet         | `dotnet nuget push`                   | `--api-key`                              | registry API                   |
+| Docker / OCI  | `docker push`                         | `docker login`                           | manifest inspect               |
 
 Two corrections to the original list, so they are not built as stated:
 

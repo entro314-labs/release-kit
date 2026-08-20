@@ -227,6 +227,146 @@ describe('non-Node projects', () => {
   })
 })
 
+describe('one repository, two ecosystems', () => {
+  // A Tauri plugin is a crate and an npm package built from one source tree: both
+  // manifests sit at the root, carry the same version, and publish on the same release.
+  const plugin = (crateVersion = '1.0.0') => ({
+    name: '@tauri-apps/plugin-demo',
+    files: {
+      'Cargo.toml': `[package]\nname = "tauri-plugin-demo"\nversion = "${crateVersion}"\n`,
+      'Cargo.lock':
+        '[[package]]\nname = "adler2"\nversion = "2.0.1"\n\n' +
+        `[[package]]\nname = "tauri-plugin-demo"\nversion = "${crateVersion}"\n`,
+    },
+  })
+
+  it('bumps both manifests and the lockfile with no config at all', () => {
+    const repo = makeRepo(plugin())
+    const { status, stdout } = release(repo, ['minor', '--yes'], {
+      CARGO_REGISTRY_TOKEN: 'test-token',
+    })
+    assert.equal(status, 0, stdout)
+    assert.match(stdout, /also versioned in Cargo\.toml, Cargo\.lock \(detected\)/)
+    assert.equal(JSON.parse(readFile(repo, 'package.json')).version, '1.1.0')
+    assert.match(readFile(repo, 'Cargo.toml'), /^version = "1\.1\.0"$/m)
+    assert.match(readFile(repo, 'Cargo.lock'), /name = "tauri-plugin-demo"\nversion = "1\.1\.0"/)
+    assert.match(readFile(repo, 'Cargo.lock'), /name = "adler2"\nversion = "2\.0\.1"/)
+  })
+
+  it('publishes to npm first and crates.io second', () => {
+    const repo = makeRepo(plugin())
+    const { status, stdout } = release(repo, ['minor', '--yes'], {
+      CARGO_REGISTRY_TOKEN: 'test-token',
+    })
+    assert.equal(status, 0, stdout)
+    const published = stubCalls(repo).filter((c) => /^(npm|cargo) publish/.test(c))
+    // npm is the recoverable one — an unpublish window exists there and not on crates.io —
+    // so a failure part-way through must not have already made the permanent half.
+    assert.deepEqual(published, ['npm publish --tag latest', 'cargo publish'])
+  })
+
+  it('looks the crate up under its crate name, not the npm one', () => {
+    const repo = makeRepo(plugin())
+    release(repo, ['minor', '--yes'], { CARGO_REGISTRY_TOKEN: 'test-token' })
+    const calls = stubCalls(repo)
+    assert.ok(
+      calls.includes('cargo info tauri-plugin-demo@1.1.0'),
+      `looked up the crate by its own name, got: ${calls.join(' | ')}`,
+    )
+  })
+
+  it('skips the half that is already published and runs the other', () => {
+    const repo = makeRepo(plugin())
+    const { status, stdout } = release(repo, ['minor', '--yes'], {
+      CARGO_REGISTRY_TOKEN: 'test-token',
+      CARGO_PUBLISHED: '0',
+    })
+    assert.equal(status, 0, stdout)
+    assert.match(stdout, /tauri-plugin-demo@1\.1\.0 is already published/)
+    const published = stubCalls(repo).filter((c) => /^(npm|cargo) publish/.test(c))
+    assert.deepEqual(published, ['npm publish --tag latest'])
+  })
+
+  it('fails preflight when crates.io has no credentials', () => {
+    const repo = makeRepo(plugin())
+    const { status, stdout } = release(repo, ['minor', '--yes'], {
+      CARGO_REGISTRY_TOKEN: '',
+      CARGO_REGISTRIES_CRATES_IO_TOKEN: '',
+      HOME: repo.root,
+    })
+    assert.equal(status, 1)
+    assert.match(stdout, /cargo has no publish credentials/)
+  })
+
+  it('leaves a manifest on its own version line alone, and says why', () => {
+    // Different versions mean two independent release lines. Syncing them would silently
+    // jump the crate five minor versions; refusing is the only safe reading.
+    const repo = makeRepo(plugin('0.3.0'))
+    const { status, stdout } = release(repo, ['minor', '--yes'])
+    assert.equal(status, 0, stdout)
+    assert.match(stdout, /Cargo\.toml is at 0\.3\.0 while package\.json is at 1\.0\.0/)
+    assert.match(readFile(repo, 'Cargo.toml'), /^version = "0\.3\.0"$/m)
+    assert.ok(
+      !stubCalls(repo).some((c) => c.startsWith('cargo publish')),
+      'never published a crate it was not versioning',
+    )
+  })
+
+  it('does not detect a publish command for a crate that forbids publishing', () => {
+    const repo = makeRepo({
+      name: '@scope/demo',
+      files: {
+        'Cargo.toml': '[package]\nname = "internal"\nversion = "1.0.0"\npublish = false\n',
+      },
+    })
+    const { status, stdout } = release(repo, ['minor', '--yes'])
+    assert.equal(status, 0, stdout)
+    assert.match(readFile(repo, 'Cargo.toml'), /^version = "1\.1\.0"$/m)
+    assert.ok(
+      !stubCalls(repo).some((c) => c.startsWith('cargo publish')),
+      'honoured publish = false',
+    )
+  })
+
+  it('versions a native extension crate without publishing it to crates.io', () => {
+    // maturin and napi-rs compile a cdylib into a wheel or a .node. Its version tracks the
+    // package it ships inside — which is why the two match — but it is not a crate anyone
+    // depends on, and detecting `cargo publish` for it would publish the wrong thing.
+    const repo = makeRepo({
+      files: {
+        'Cargo.toml':
+          '[package]\nname = "demo-native"\nversion = "1.0.0"\n\n' +
+          '[lib]\ncrate-type = ["cdylib"]\n',
+      },
+    })
+    const { status, stdout } = release(repo, ['minor', '--yes'])
+    assert.equal(status, 0, stdout)
+    assert.match(readFile(repo, 'Cargo.toml'), /^version = "1\.1\.0"$/m)
+    assert.ok(
+      !stubCalls(repo).some((c) => c.startsWith('cargo publish')),
+      'never published an extension module as a crate',
+    )
+    assert.ok(
+      stubCalls(repo).some((c) => c.startsWith('npm publish')),
+      'still published the package it ships inside',
+    )
+  })
+
+  it('does not extend a versionFiles the project wrote itself', () => {
+    const repo = makeRepo({
+      config: { versionFiles: ['VERSION'], publish: null, steps: ['version', 'tag', 'push'] },
+      files: {
+        VERSION: '1.0.0\n',
+        'Cargo.toml': '[package]\nname = "demo"\nversion = "1.0.0"\n',
+      },
+    })
+    const { status, stdout } = release(repo, ['minor', '--yes'])
+    assert.equal(status, 0, stdout)
+    assert.equal(readFile(repo, 'VERSION'), '1.1.0\n')
+    assert.match(readFile(repo, 'Cargo.toml'), /^version = "1\.0\.0"$/m)
+  })
+})
+
 describe('auto', () => {
   it('infers the bump from the commits since the last tag', () => {
     const repo = makeRepo({ config: { publish: null, steps: ['version', 'tag', 'push'] } })
@@ -269,6 +409,105 @@ describe('repositories that version by tag alone', () => {
     assert.equal(status, 1)
     assert.match(stdout, /nothing to bump from/)
   })
+
+  // A language with no version of its own still leaves the project wanting `--version` to
+  // work, so the number is kept in source and the tag is supposed to match it.
+  const goModule = (files) =>
+    makeRepo({
+      manifest: false,
+      files: { 'go.mod': 'module github.com/acme/tool\n\ngo 1.24\n', ...files },
+    })
+
+  const tagged = (repo, version) => {
+    execFileSync('git', ['tag', '-a', `v${version}`, '-m', 'base'], { cwd: repo.root })
+    writeFileSync(join(repo.root, 'a.go'), 'package main')
+    execFileSync('git', ['add', '-A'], { cwd: repo.root })
+    execFileSync('git', ['commit', '-qm', 'feat: add a thing'], { cwd: repo.root })
+    return repo
+  }
+
+  it('writes the version into the files a project listed, which it used to ignore', () => {
+    // The version step ran, wrote nothing, and tagged a commit still carrying the old
+    // number: `bumping` required a versionFile, and a tag-versioned repository has none.
+    const repo = tagged(
+      goModule({ 'version.go': 'package main\n\nconst Version = "1.2.0"\n' }),
+      '1.2.0',
+    )
+    writeFileSync(
+      join(repo.root, 'release.config.json'),
+      JSON.stringify({
+        versionFile: null,
+        versionFiles: [{ path: 'version.go', pattern: '^const Version = "(.+)"' }],
+        publish: null,
+        steps: ['version', 'tag', 'push'],
+      }),
+    )
+    execFileSync('git', ['add', '-A'], { cwd: repo.root })
+    execFileSync('git', ['commit', '-qm', 'chore: config'], { cwd: repo.root })
+
+    const { status, stdout } = release(repo, ['minor', '--yes'])
+    assert.equal(status, 0, stdout)
+    assert.match(readFile(repo, 'version.go'), /const Version = "1\.3\.0"/)
+    assert.ok(tagsOnRemote(repo).includes('v1.3.0'))
+  })
+
+  it('detects a version constant in source with no config at all', () => {
+    const repo = tagged(
+      goModule({ 'version.go': 'package main\n\nconst Version = "1.2.0"\n' }),
+      '1.2.0',
+    )
+    const { status, stdout } = release(repo, ['minor', '--yes', '--skip', 'publish,release'])
+    assert.equal(status, 0, stdout)
+    assert.match(stdout, /also versioned in version\.go \(detected\)/)
+    assert.match(readFile(repo, 'version.go'), /const Version = "1\.3\.0"/)
+  })
+
+  it('finds the constant in the conventional nested packages too', () => {
+    const repo = tagged(
+      goModule({
+        'internal/version/version.go': 'package version\n\nvar Version string = "1.2.0"\n',
+      }),
+      '1.2.0',
+    )
+    const { status, stdout } = release(repo, ['minor', '--yes', '--skip', 'publish,release'])
+    assert.equal(status, 0, stdout)
+    assert.match(readFile(repo, 'internal/version/version.go'), /Version string = "1\.3\.0"/)
+  })
+
+  it('leaves a placeholder a build injects with -ldflags alone, and silently', () => {
+    // `var Version = "dev"` is replaced at link time. It is not a version to bump, and it
+    // is common enough that warning about it every release would be noise.
+    const repo = tagged(
+      goModule({ 'version.go': 'package main\n\nvar Version = "dev"\n' }),
+      '1.2.0',
+    )
+    const { status, stdout } = release(repo, ['minor', '--yes', '--skip', 'publish,release'])
+    assert.equal(status, 0, stdout)
+    assert.equal(readFile(repo, 'version.go'), 'package main\n\nvar Version = "dev"\n')
+    assert.doesNotMatch(stdout, /version\.go/)
+  })
+
+  it('leaves a constant that has drifted from the tag alone', () => {
+    const repo = tagged(
+      goModule({ 'version.go': 'package main\n\nconst Version = "0.9.0"\n' }),
+      '1.2.0',
+    )
+    const { status, stdout } = release(repo, ['minor', '--yes', '--skip', 'publish,release'])
+    assert.equal(status, 0, stdout)
+    assert.match(readFile(repo, 'version.go'), /const Version = "0\.9\.0"/)
+  })
+
+  it('does not reach for a registry just because it found a version file', () => {
+    // The crash this pins: detected mirrors are { path, pattern }, and publish detection
+    // read them as plain paths.
+    const repo = tagged(
+      goModule({ 'version.go': 'package main\n\nconst Version = "1.2.0"\n' }),
+      '1.2.0',
+    )
+    const { status, stdout } = release(repo, ['minor', '--yes', '--skip', 'release'])
+    assert.equal(status, 0, stdout)
+    assert.ok(!stubCalls(repo).some((c) => c.startsWith('npm publish')), 'never published')
+  })
 })
 
 describe('commits that will not appear in the notes', () => {
@@ -306,6 +545,24 @@ describe('choosing where notes come from', () => {
     assert.match(tagAnnotation(repo, 'v1.1.0'), /Hand-written note/)
   })
 
+  it('keeps a hand-written section when a dirty tree is committed first', () => {
+    // Drafting is deferred past the commit only when preflight found nothing to release
+    // with. Deferring on a dirty tree alone re-drafted over a section that already existed,
+    // which discarded the notes the confirmation prompt showed and appended a second
+    // section for the same version.
+    const repo = makeRepo({
+      changelog: '# Changelog\n\n## [1.1.0] - 2026-01-01\n\n- Hand-written note.\n',
+      config: { publish: null },
+    })
+    writeFileSync(join(repo.root, 'junk.txt'), 'x')
+
+    const { status, stdout } = release(repo, ['1.1.0', '--yes'])
+    assert.equal(status, 0, stdout)
+    assert.match(tagAnnotation(repo, 'v1.1.0'), /Hand-written note/)
+    const changelog = readFile(repo, 'CHANGELOG.md')
+    assert.equal(changelog.match(/^## \[1\.1\.0\]/gm).length, 1, changelog)
+  })
+
   it('forces the commit log when asked, over a populated [Unreleased]', () => {
     // --notes names the source; --assistant only names the tool. Asking for one thing and
     // being given another is worse than being told it is unavailable.
@@ -333,5 +590,89 @@ describe('choosing where notes come from', () => {
     const { status, stdout } = release(withChangelog(), ['1.1.0', '--notes', 'telepathy', '--yes'])
     assert.equal(status, 1)
     assert.match(stdout, /unknown notes source/)
+  })
+})
+
+describe('which tag a release reads history from', () => {
+  const tagOnly = () => makeRepo({ config: { publish: null, steps: ['version', 'tag', 'push'] } })
+  const commit = (repo, subject, file = subject.replace(/\W/g, '')) => {
+    writeFileSync(join(repo.root, `${file}.txt`), file)
+    execFileSync('git', ['add', '-A'], { cwd: repo.root })
+    execFileSync('git', ['commit', '-qm', subject], { cwd: repo.root })
+  }
+  const tag = (repo, name) =>
+    execFileSync('git', ['tag', '-a', name, '-m', name], { cwd: repo.root })
+
+  it('ignores a tag that carries no version', () => {
+    // A rolling channel marker — tauri-release-kit maintains `latest-beta` and
+    // `latest-alpha` — is the nearest tag but not a release. Reading history from it hid
+    // every commit since the real last release and aborted the run.
+    const repo = tagOnly()
+    tag(repo, 'v1.0.0')
+    commit(repo, 'feat: add a thing')
+    tag(repo, 'latest-beta')
+
+    const { status, stdout } = release(repo, ['auto', '--yes'])
+    assert.equal(status, 0, stdout)
+    assert.match(stdout, /auto: minor/)
+    assert.ok(tagsOnRemote(repo).includes('v1.1.0'), 'released 1.1.0')
+  })
+
+  it('takes the highest version, not the nearest tag', () => {
+    // `git describe --abbrev=0` answers "nearest ancestor", which is not "latest release":
+    // a patch tagged on top of a later minor would drag the baseline backwards. A
+    // repository versioned by tag alone reads its current version from exactly this.
+    const repo = makeRepo({
+      config: { versionFile: null, publish: null, steps: ['tag', 'push'] },
+    })
+    tag(repo, 'v2.0.0')
+    commit(repo, 'fix: something small')
+    tag(repo, 'v1.9.9')
+
+    const { status, stdout } = release(repo, ['auto', '--yes'])
+    assert.equal(status, 0, stdout)
+    assert.match(stdout, /2\.0\.0 → 2\.0\.1/)
+  })
+
+  it('rolls the release candidates up into the stable release they led to', () => {
+    // Promoting 2.0.0-rc.2 to 2.0.0 read history from rc.2, so the only commit in range
+    // was the release chore — which is ignored. The features that *were* 2.0.0 went
+    // missing from the tag annotation and the GitHub release.
+    const repo = tagOnly()
+    tag(repo, 'v1.0.0')
+    commit(repo, 'feat: big new dashboard')
+    commit(repo, 'feat: export to CSV')
+    release(repo, ['2.0.0-rc.1', '--yes'])
+    commit(repo, 'fix: rc feedback typo')
+    release(repo, ['2.0.0-rc.2', '--yes'])
+
+    const { status, stdout } = release(repo, ['2.0.0', '--yes'])
+    assert.equal(status, 0, stdout)
+    const annotation = execFileSync('git', ['tag', '-l', 'v2.0.0', '--format=%(contents)'], {
+      cwd: repo.root,
+      encoding: 'utf8',
+    })
+    assert.match(annotation, /big new dashboard/, 'the rc.1 feature is in the stable notes')
+    assert.match(annotation, /export to CSV/, 'the second feature is in the stable notes')
+    assert.match(annotation, /rc feedback typo/, 'the rc.2 fix is in the stable notes')
+  })
+
+  it('still scopes a release candidate to what changed since the previous one', () => {
+    // Rolling up is only right for the stable release. Each candidate's own notes should
+    // say what changed in that candidate, or they all repeat the whole cycle.
+    const repo = tagOnly()
+    tag(repo, 'v1.0.0')
+    commit(repo, 'feat: big new dashboard')
+    release(repo, ['2.0.0-rc.1', '--yes'])
+    commit(repo, 'fix: rc feedback typo')
+
+    const { status, stdout } = release(repo, ['2.0.0-rc.2', '--yes'])
+    assert.equal(status, 0, stdout)
+    const annotation = execFileSync('git', ['tag', '-l', 'v2.0.0-rc.2', '--format=%(contents)'], {
+      cwd: repo.root,
+      encoding: 'utf8',
+    })
+    assert.match(annotation, /rc feedback typo/)
+    assert.ok(!annotation.includes('big new dashboard'), 'rc.1 content is not repeated')
   })
 })

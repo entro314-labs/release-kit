@@ -23,6 +23,8 @@ const git = (cwd, ...args) => execFileSync('git', args, { cwd, encoding: 'utf8',
  * @param {object} [options.config]   release.config.json contents
  * @param {string} [options.changelog] CHANGELOG.md contents, omitted when absent
  * @param {Record<string,string>} [options.files] extra files to create
+ * @param {boolean} [options.manifest] write a package.json; false for a repository whose
+ *                                     language has no manifest at all, like a Go module
  */
 export function makeRepo({
   name = '@scope/demo',
@@ -30,15 +32,18 @@ export function makeRepo({
   config,
   changelog,
   files = {},
+  manifest = true,
 } = {}) {
   const root = mkdtempSync(join(tmpdir(), 'release-kit-repo-'))
   const remote = `${root}-origin.git`
   const calls = join(root, '..', `${root.split('/').pop()}-calls.log`)
 
-  writeFileSync(
-    join(root, 'package.json'),
-    `{\n  "name": "${name}",\n  "version": "${version}"\n}\n`,
-  )
+  if (manifest) {
+    writeFileSync(
+      join(root, 'package.json'),
+      `{\n  "name": "${name}",\n  "version": "${version}"\n}\n`,
+    )
+  }
   if (config)
     writeFileSync(join(root, 'release.config.json'), `${JSON.stringify(config, null, 2)}\n`)
   if (changelog) writeFileSync(join(root, 'CHANGELOG.md'), changelog)
@@ -65,7 +70,7 @@ export function makeRepo({
   return { root, remote, calls, bin: stubBin(`${root}-bin`, calls) }
 }
 
-/** A PATH entry holding stub `gh` and `npm` that record their argv. */
+/** A PATH entry holding stub `gh`, `npm` and `cargo` that record their argv. */
 function stubBin(bin, calls) {
   mkdirSync(bin, { recursive: true })
 
@@ -94,7 +99,17 @@ esac
 exit 0
 `,
   )
-  for (const name of ['gh', 'npm']) chmodSync(join(bin, name), 0o755)
+  writeFileSync(
+    join(bin, 'cargo'),
+    `#!/bin/sh
+echo "cargo $*" >> "${calls}"
+case "$1" in
+  info) exit \${CARGO_PUBLISHED:-101} ;;
+esac
+exit 0
+`,
+  )
+  for (const name of ['gh', 'npm', 'cargo']) chmodSync(join(bin, name), 0o755)
   return bin
 }
 

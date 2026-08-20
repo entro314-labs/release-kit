@@ -4,6 +4,86 @@ All notable changes to @entro314labs/release-kit.
 
 ## [Unreleased]
 
+### Added
+
+- **One repository releasing to two registries.** Some projects are one source tree with a
+  manifest in two ecosystems — a Tauri plugin is a crate and its npm bindings, a maturin
+  project is a crate and a wheel — and both manifests carry the same version. With no
+  config, a second root manifest (`package.json`, `pyproject.toml`, `Cargo.toml`, plus
+  `Cargo.lock` beside a crate) is now detected and bumped in step, and `publish` takes an
+  array so both registries are published to on one release. Detection only pairs manifests
+  that **already agree on the version**: two manifests on different numbers are two
+  independent release lines, and dragging one to the other's number is a silent, wrong
+  release — that case warns and is left alone. A project that wrote its own `versionFile`
+  or `versionFiles` is never extended.
+
+  The detected npm command runs before the detected cargo one, because npm allows an
+  unpublish for 72 hours and crates.io never does: a publish that fails part-way through
+  must not already have made the permanent half.
+
+- **crates.io preflight.** `cargo` is now a row in the registry table: credentials are
+  found in `CARGO_REGISTRY_TOKEN`, `CARGO_REGISTRIES_CRATES_IO_TOKEN` or the file
+  `cargo login` writes, and `cargo info <crate>@<version>` decides whether this version is
+  already on the index, so a re-run skips it rather than failing. The lookup uses the name
+  from `Cargo.toml` rather than the package name: a plugin is `@tauri-apps/plugin-x` on
+  npm and `tauri-plugin-x` on crates.io, and asking crates.io about the npm name reports
+  every version as unpublished.
+
+- **Languages that record no version of their own.** A Go module has only `go.mod`, which
+  carries no version at all, so a project that wants `--version` to work keeps the number
+  in source and expects the tag to match. `version.go`, `internal/version/version.go` and
+  `pkg/version/version.go` are now detected and kept in step with the tag, with no config:
+  `const Version`, `var Version` and `var Version string` are all read. As with the
+  companion manifests, a file is adopted only when it **already carries the current
+  version** — which also rules out the `var Version = "dev"` placeholder a build replaces
+  with `-ldflags`. A mismatch here is skipped silently rather than warned about, because
+  a placeholder is a normal thing to find, not a mistake. Anything outside that convention
+  is still three lines of `versionFiles` config with a `pattern`.
+
+### Fixed
+
+- **`versionFiles` was silently ignored by any repository that versions by tag.** The
+  `version` step required a `versionFile` before it would write anything, and a repository
+  with `"versionFile": null` has none by definition. The step was listed, selected and
+  reported as run; it wrote nothing. A Go module configured to keep its version in
+  `version.go` released every tag pointing at a commit that still carried the previous
+  number, with no warning at any point. The version step now works from every file it has
+  been given, whether or not one of them is the source of truth.
+
+### Changed
+
+- **A manifest that forbids publishing no longer has a publish command detected for it.**
+  A `"private": true` package.json previously detected `npm publish` and then failed
+  preflight for being private; a crate with `publish = false` detected `cargo publish`.
+  Both are now read as "this repository releases by tag alone" and get no command. A crate
+  built only as a `cdylib` is read the same way: that is a native extension module — what
+  maturin and napi-rs compile into a wheel or a `.node` — so its version is synced but it
+  is never published to crates.io. An explicitly configured npm publish for a private
+  package still fails preflight, since that is a stated intent that cannot be met.
+
+### Fixed
+
+- **A dirty tree discarded a hand-written changelog section and released a re-draft
+  instead.** Drafting is deferred past the commit so the notes can describe it, but the
+  post-commit step decided to re-draft from the dirty tree alone rather than from whether
+  preflight had actually deferred. When `CHANGELOG.md` already held a section for the
+  version, preflight took it — printing `CHANGELOG.md has a <version> section` and showing
+  it at the confirmation prompt — and then the commit step overwrote it. The tag annotation
+  and the GitHub release carried notes nobody approved, and the drafted section was appended
+  to `CHANGELOG.md` beside the hand-written one, leaving two sections for the same version.
+  Deferral is now recorded when preflight defers, so an existing section survives the
+  commit. Introduced in 2.8.0 for every release with a dirty tree; before that it needed a
+  configured assistant.
+
+- **`release-train` inferred bumps from a different grammar than the release it drives.**
+  `bumpFromCommits` carried its own regexes, narrower than `parseCommit` in three ways: a
+  type had to be `[a-z]+`, so `i18n!:` and `a11y!:` were not read as breaking; the match
+  was case-sensitive, so `Feat:` was not a feature; and `BREAKING CHANGE` matched anywhere
+  in the message, so a body saying "this is not a BREAKING CHANGE" planned a major. A train
+  that infers a different bump than the release-kit run it delegates to plans a version it
+  will not produce. The two files share no module — importing release.mjs releases — so the
+  copy stays, but it is now a faithful one, pinned by tests.
+
 ## [2.8.0] - 2026-08-20
 
 ### Changed

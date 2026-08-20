@@ -100,19 +100,32 @@ export function bumpSemver(version, bump) {
 }
 
 /**
+ * A commit subject, by the same grammar release.mjs `parseCommit` reads. The two files are
+ * separate bins that share no module — release.mjs releases on import — so this is a
+ * deliberate copy, and it has to stay a faithful one: a train that infers a different bump
+ * than the release-kit run it delegates to plans a version it will not produce.
+ */
+const CONVENTIONAL_SUBJECT = /^([a-z][a-z0-9-]*)(?:\([^)]+\))?(!)?: .+$/i
+
+/**
  * Conventional Commit derivation over full messages: feat → minor, a breaking change
- * (`!` in the type or a BREAKING CHANGE footer anywhere in the body) → major, softened
- * to minor below 1.0.0, else patch.
+ * (`!` in the type or a BREAKING CHANGE footer) → major, softened to minor below 1.0.0,
+ * else patch.
  */
 export function bumpFromCommits(messages, currentVersion) {
   let bump = 'patch'
   const below1 = parseSemver(currentVersion)?.major === 0
   for (const message of messages) {
-    const subject = message.split('\n', 1)[0]
-    if (/^[a-z]+(\([^)]*\))?!:/.test(subject) || /BREAKING CHANGE/.test(message)) {
+    const [subject, ...rest] = message.split('\n')
+    const match = CONVENTIONAL_SUBJECT.exec(subject.trim())
+    if (!match) continue
+    const [, type, bang] = match
+    // Anchored to a line of its own: a body that merely says "not a BREAKING CHANGE" is
+    // prose, and reading it as a footer releases a major nobody asked for.
+    if (bang || /^BREAKING[ -]CHANGE:/m.test(rest.join('\n'))) {
       return below1 ? 'minor' : 'major'
     }
-    if (/^feat(\([^)]*\))?:/.test(subject)) bump = 'minor'
+    if (/^feat(ure)?$/.test(type.toLowerCase())) bump = 'minor'
   }
   return bump
 }

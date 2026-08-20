@@ -358,24 +358,26 @@ Only one step is Node-specific: `publish`. Committing, changelog rolling, taggin
 and GitHub releases are the same everywhere, so `versionFile` points at wherever a project
 keeps its version and the rest works unchanged.
 
-| Project                        | Config                                                                          |
-| ------------------------------ | ------------------------------------------------------------------------------- |
-| Node (npm)                     | nothing — `package.json` and `npm publish` are the defaults                     |
-| Node (pnpm / bun)              | `{"publish": "pnpm publish --tag %d"}` or `{"publish": "bun publish --tag %d"}` |
-| Rust                           | `{"versionFile": "Cargo.toml", "publish": "cargo publish"}`                     |
-| Python                         | `{"versionFile": "pyproject.toml", "publish": "uv publish"}`                    |
-| Go                             | `{"versionFile": null, "publish": "go list -m %n@%t"}` — the tag is the release |
-| Anything with a `VERSION` file | `{"versionFile": "VERSION", "publish": null}`                                   |
-| Versioned only by tag          | `{"versionFile": null}`, then `release-kit 1.2.3`                               |
+| Project                        | Config                                                                                 |
+| ------------------------------ | -------------------------------------------------------------------------------------- |
+| Node (npm)                     | nothing — `package.json` and `npm publish` are the defaults                            |
+| Node (pnpm / bun)              | `{"publish": "pnpm publish --tag %d"}` or `{"publish": "bun publish --tag %d"}`        |
+| Rust                           | nothing — `Cargo.toml` and `cargo publish` are detected                                |
+| Rust + npm (a Tauri plugin)    | nothing — both manifests bump, both registries publish                                 |
+| Python                         | `{"versionFile": "pyproject.toml", "publish": "uv publish"}`                           |
+| Go                             | `{"publish": "go list -m %n@%t"}` — the tag is the release; a `version.go` is detected |
+| Anything with a `VERSION` file | `{"versionFile": "VERSION", "publish": null}`                                          |
+| Versioned only by tag          | `{"versionFile": null}`, then `release-kit 1.2.3`                                      |
 
 The publish step also gets a preflight when the command is one it recognises:
 
-| Publish command | Authentication                        | Already published?                  |
-| --------------- | ------------------------------------- | ----------------------------------- |
-| `npm` / `pnpm`  | `whoami`                              | `view <name>@<version>`             |
-| `bun`           | `bun pm whoami`                       | `bun pm view <name>@<version>`      |
-| `uv`            | `UV_PUBLISH_TOKEN` in the environment | none — `uv` skips duplicates itself |
-| `go`            | none needed                           | `go list -m <module>@<tag>`         |
+| Publish command | Authentication                                              | Already published?                  |
+| --------------- | ----------------------------------------------------------- | ----------------------------------- |
+| `npm` / `pnpm`  | `whoami`                                                    | `view <name>@<version>`             |
+| `bun`           | `bun pm whoami`                                             | `bun pm view <name>@<version>`      |
+| `uv`            | `UV_PUBLISH_TOKEN` in the environment                       | none — `uv` skips duplicates itself |
+| `cargo`         | `CARGO_REGISTRY_TOKEN`, or `cargo login`'s credentials file | `cargo info <crate>@<version>`      |
+| `go`            | none needed                                                 | `go list -m <module>@<tag>`         |
 
 Anything else runs as written with no preflight. The project name comes from the manifest —
 `name` in `package.json`, `Cargo.toml` or `pyproject.toml`, `module` in `go.mod` — falling
@@ -384,7 +386,95 @@ back to the repository directory.
 `publish` is detected too, but only where one ecosystem obviously owns it: `package.json`
 gets `npm publish`, `Cargo.toml` gets `cargo publish`. Python has several publishers (uv,
 twine, poetry, flit) and Go has none, so those get nothing rather than a guess — publishing
-to the wrong registry is a far worse failure than being asked to configure it.
+to the wrong registry is a far worse failure than being asked to configure it. A manifest
+that forbids publishing is honoured: a `"private": true` package.json, a crate with
+`publish = false`, and a crate built only as a `cdylib` — a native extension module rather
+than a library — get no command at all.
+
+### One repository, two registries
+
+A Tauri plugin is a crate and its npm bindings built from one source tree; a maturin
+project is a crate and a wheel. Both manifests sit at the repository root and carry the
+same version, and both publish on the same release. That needs no config:
+
+```
+tauri-plugin-demo/
+  package.json     @tauri-apps/plugin-demo   1.4.0
+  Cargo.toml       tauri-plugin-demo         1.4.0
+  Cargo.lock
+```
+
+```sh
+release-kit minor --yes
+#   also versioned in Cargo.toml, Cargo.lock (detected)
+#   publish: npm publish --tag latest
+#   publish: cargo publish
+```
+
+The second manifest is detected only when it **already carries the same version**. Two
+manifests on different numbers are two independent release lines, and dragging one to the
+other's number is a silent, wrong release — that case says so and leaves the file alone,
+pointing at `versionFiles` for a project that really does want them joined. A project that
+wrote its own `versionFile` or `versionFiles` is never extended behind its back.
+
+`publish` therefore takes an array as well as a string, for any project releasing to more
+than one registry:
+
+```json
+{ "publish": ["npm publish --tag %d", "cargo publish"] }
+```
+
+They run in order, each with its own authentication check and its own already-published
+check, so a re-run after a half-finished publish completes the other half instead of
+failing. The detected order puts npm before cargo deliberately: npm allows an unpublish for
+72 hours and crates.io never does, so a publish that fails part-way through has not already
+made the permanent half.
+
+Names are resolved per registry rather than once: the crate is looked up under the `name`
+in `Cargo.toml`, not the npm package name, since `@tauri-apps/plugin-demo` and
+`tauri-plugin-demo` are the same release under two names.
+
+### Languages that have no version of their own
+
+A Go module has only `go.mod`, and `go.mod` carries no version — `go get` resolves a tag.
+The same is true of a Swift package or a plain C library. There is nothing to bump, so the
+tag is the version and `versionFile` resolves to `null` on its own.
+
+Those projects still usually keep a number in source, so `mytool --version` prints
+something:
+
+```go
+package main
+
+const Version = "1.2.0"
+```
+
+`version.go`, `internal/version/version.go` and `pkg/version/version.go` are detected and
+rewritten on release, with no config — `const Version`, `var Version` and
+`var Version string` are all read. The tag stays the source of truth; the constant is a
+mirror kept in step with it.
+
+Detection adopts a file only when it **already carries the current version**. That rules
+out the placeholder a build replaces at link time:
+
+```go
+var Version = "dev"   // -ldflags "-X main.Version=$(git describe)" — left alone
+```
+
+A mismatch here is skipped silently rather than warned about, because a placeholder is a
+normal thing to find rather than a mistake — unlike two manifests on different versions.
+
+For a constant somewhere else, or in a language whose convention is not in that list, name
+it with a `pattern`:
+
+```json
+{
+  "versionFiles": [{ "path": "src/version.h", "pattern": "^#define VERSION \"(.+)\"" }]
+}
+```
+
+`versionFiles` is written whether or not the project has a `versionFile`, so this works for
+a repository that versions by tag alone.
 
 With no `versionFile` configured it is detected from the repository — `package.json`,
 `pyproject.toml`, `Cargo.toml`, then `VERSION` — so most projects need no config for it at
@@ -459,22 +549,22 @@ execution is not wired up yet.
 `release.config.json`, beside `package.json`. Every key is optional; unknown keys abort
 rather than being silently ignored.
 
-| Key             | Default                  | Meaning                                                               |
-| --------------- | ------------------------ | --------------------------------------------------------------------- |
-| `steps`         | all but `commit`         | Which steps run; the order is fixed                                   |
-| `tagPrefix`     | `"v"`                    | Prepended to the version to form the tag                              |
-| `branch`        | `"main"`                 | The only branch a release may run from; `null` allows any             |
-| `remote`        | `"origin"`               | Git remote to push to                                                 |
-| `changelog`     | `"CHANGELOG.md"`         | Changelog path; `null` for a project without one                      |
-| `versionFile`   | detected                 | Where the version lives; `null` versions by tag alone                 |
-| `versionFiles`  | `[]`                     | Further files kept in sync; a path or `{ path, pattern }`             |
-| `publish`       | `"npm publish --tag %d"` | Publish command; `null` means none is configured                      |
-| `versioning`    | `"conventional"`         | How `auto` infers; or `always-patch` / `-minor` / `-major`            |
-| `verify`        | `null`                   | Command run during preflight; non-zero aborts before anything mutates |
-| `assistant`     | `null`                   | Drafting CLI: a name, `"auto"`, or `{ tool, model, effort }`          |
-| `commitMessage` | `"chore(release): %t"`   | Release commit subject                                                |
-| `releaseTitle`  | `"%t"`                   | GitHub release title                                                  |
-| `assets`        | `[]`                     | Files attached to the GitHub release                                  |
+| Key             | Default                | Meaning                                                               |
+| --------------- | ---------------------- | --------------------------------------------------------------------- |
+| `steps`         | all but `commit`       | Which steps run; the order is fixed                                   |
+| `tagPrefix`     | `"v"`                  | Prepended to the version to form the tag                              |
+| `branch`        | `"main"`               | The only branch a release may run from; `null` allows any             |
+| `remote`        | `"origin"`             | Git remote to push to                                                 |
+| `changelog`     | `"CHANGELOG.md"`       | Changelog path; `null` for a project without one                      |
+| `versionFile`   | detected               | Where the version lives; `null` versions by tag alone                 |
+| `versionFiles`  | detected               | Further files kept in sync; a path or `{ path, pattern }`             |
+| `publish`       | detected               | Publish command, or an array of them; `null` publishes nothing        |
+| `versioning`    | `"conventional"`       | How `auto` infers; or `always-patch` / `-minor` / `-major`            |
+| `verify`        | `null`                 | Command run during preflight; non-zero aborts before anything mutates |
+| `assistant`     | `null`                 | Drafting CLI: a name, `"auto"`, or `{ tool, model, effort }`          |
+| `commitMessage` | `"chore(release): %t"` | Release commit subject                                                |
+| `releaseTitle`  | `"%t"`                 | GitHub release title                                                  |
+| `assets`        | `[]`                   | Files attached to the GitHub release                                  |
 
 Command and message strings expand four tokens: `%v` version, `%t` tag, `%n` package
 name, `%d` npm dist-tag. In the `publish` command line the substituted values are

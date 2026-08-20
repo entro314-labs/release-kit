@@ -374,3 +374,23 @@ test('planReleases: devDependency edge cascades but never orders', () => {
   assert.equal(lib.reason, 'depends on tool')
   assert.deepEqual(lib.rewrites, []) // devDeps are not rewritten — they are not published
 })
+
+test('bumpFromCommits reads the same grammar release.mjs parses', () => {
+  // Each of these was mis-read before: the type pattern was [a-z]+ and case-sensitive, and
+  // BREAKING CHANGE was matched anywhere in the message rather than as a footer.
+  assert.equal(bumpFromCommits(['i18n!: drop the legacy locale files'], '2.0.0'), 'major')
+  assert.equal(bumpFromCommits(['a11y(nav)!: remove the skip link'], '2.0.0'), 'major')
+  assert.equal(bumpFromCommits(['Feat: add x'], '2.0.0'), 'minor')
+  assert.equal(bumpFromCommits(['feature: add x'], '2.0.0'), 'minor')
+  assert.equal(
+    bumpFromCommits(['fix: tidy\n\nThis is not a BREAKING CHANGE, just a rename.'], '2.0.0'),
+    'patch',
+    'prose mentioning the phrase is not a footer',
+  )
+  assert.equal(
+    bumpFromCommits(['fix: tidy\n\nBREAKING-CHANGE: parse() returns a tree'], '2.0.0'),
+    'major',
+    'the hyphenated footer counts, as it does in release.mjs',
+  )
+  assert.equal(bumpFromCommits(['just some prose'], '2.0.0'), 'patch', 'unparseable is not a feat')
+})

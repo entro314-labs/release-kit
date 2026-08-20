@@ -61,9 +61,16 @@ import { createInterface } from 'node:readline/promises'
  *   versionFile     string|object|null  where the project's version lives. Detected from
  *                            the repository when unset; null when it versions by tag alone
  *   versionFiles    array    further files whose version is kept in sync; each is a path
- *                            or { path, pattern }
- *   publish         string   publish command. Detected from the version source when unset,
- *                            and only where it is unambiguous; null to publish nothing
+ *                            or { path, pattern }. Written even where versionFile is null,
+ *                            which is how a language with no version of its own — a Go
+ *                            module — keeps one in source. When neither this nor
+ *                            versionFile is configured, a second root manifest and a
+ *                            conventional version constant already on the same version are
+ *                            detected and kept in step
+ *   publish         string|string[]  publish command, or several for a project that
+ *                            releases to more than one registry. Detected from the version
+ *                            sources when unset, and only where unambiguous; null to
+ *                            publish nothing
  *   commitMessage   string   release commit subject
  *   releaseTitle    string   GitHub release title
  *   assets          string[] files attached to the GitHub release
@@ -91,11 +98,11 @@ import { createInterface } from 'node:readline/promises'
  * committing, is a mistake the tool should not let you express.
  *
  *   commit     commit a dirty working tree (opt-in; touches work that predates the release)
- *   version    write the version into package.json and versionFiles
+ *   version    write the version into the version source and versionFiles
  *   changelog  roll [Unreleased] into the version, or add drafted notes
  *   tag        annotated git tag carrying the release notes
  *   push       push the branch and the tag together
- *   publish    run the configured publish command
+ *   publish    run the configured publish command(s), in order
  *   release    create the GitHub release
  *
  * `version` and `changelog` write files; those writes are persisted by a release commit
@@ -411,10 +418,56 @@ function runAssistant(prompt) {
   }
 }
 
-/** Commit subjects since the last tag, with release and merge commits filtered out. */
-function commitsSinceLastTag() {
+/**
+ * The repository's release tags that are reachable from HEAD, highest version first.
+ *
+ * `git describe --tags --abbrev=0` answers a different question — "the nearest tag of any
+ * kind" — and it is wrong in two ways that were both observed. A repository carrying tags
+ * that are not releases gets one of those as its baseline: a single rolling `latest-beta`
+ * marker, which tauri-release-kit maintains for its update channels, made a release abort
+ * with "no releasable commits since latest-beta". And "nearest ancestor" is not "latest
+ * release": a patch tagged on top of a later minor drags the baseline backwards.
+ *
+ * Only tags carrying the configured prefix and a parseable version count, and they are
+ * ordered by semver precedence rather than by position in the history. `--merged HEAD`
+ * keeps a tag made on another branch out of this branch's history, and degrades correctly
+ * in a shallow clone: a tag whose commit was not fetched is simply not listed.
+ *
+ * @returns {{name: string, version: string}[]}
+ */
+function releaseTags(prefix = config.tagPrefix ?? '') {
+  const listed = tryRead('git', ['tag', '--list', `${prefix}*`, '--merged', 'HEAD']) ?? ''
+  return listed
+    .split('\n')
+    .map((name) => name.trim())
+    .filter(Boolean)
+    .map((name) => ({ name, version: name.slice(prefix.length) }))
+    .filter(({ version }) => parseVersion(version))
+    .sort((a, b) => compareVersions(b.version, a.version))
+}
+
+/**
+ * The tag a release reads its history from.
+ *
+ * @param {{stable?: boolean}} [options] `stable` when the version being released has no
+ *   prerelease identifier, which rolls the release candidates leading to it up into it:
+ *   their work is what is shipping now, and reading from the last candidate describes only
+ *   the gap between the last two candidates. Promoting `2.0.0-rc.2` to `2.0.0` that way
+ *   produced empty notes, because the one commit in range was the release chore.
+ *   Releasing a candidate keeps the full ordering, so each candidate's notes say what
+ *   changed in that candidate rather than repeating the whole cycle.
+ * @returns {string | null}
+ */
+function lastReleaseTag({ stable = false, prefix } = {}) {
+  const tags = releaseTags(prefix)
+  const eligible = stable ? tags.filter(({ version }) => !parseVersion(version).pre.length) : tags
+  return eligible[0]?.name ?? null
+}
+
+/** Commit subjects since the last release tag, with release and merge commits filtered out. */
+function commitsSinceLastTag(options) {
   const ignored = (config.ignoreCommits ?? []).map((pattern) => new RegExp(pattern, 'i'))
-  const lastTag = tryRead('git', ['describe', '--tags', '--abbrev=0'])
+  const lastTag = lastReleaseTag(options)
   const range = lastTag ? `${lastTag}..HEAD` : 'HEAD'
   // %B is the whole message: bodies carry BREAKING CHANGE and Release-As footers. A record
   // separator keeps multi-line messages parseable when splitting the log back apart.
@@ -1313,9 +1366,9 @@ if (flag('--sync')) {
 if (argv[0] === 'lint-commits') {
   const rest = argv.slice(1)
   const subjectAt = rest.indexOf('--subject')
-  const ignored = { ...DEFAULTS, ...readUserConfig() }.ignoreCommits.map(
-    (pattern) => new RegExp(pattern, 'i'),
-  )
+  // This subcommand runs before `config` is bound, so it resolves its own.
+  const lintConfig = { ...DEFAULTS, ...readUserConfig() }
+  const ignored = lintConfig.ignoreCommits.map((pattern) => new RegExp(pattern, 'i'))
 
   let subjects
   let scope
@@ -1328,7 +1381,7 @@ if (argv[0] === 'lint-commits') {
     scope = null
   } else {
     if (!tryRead('git', ['rev-parse', '--show-toplevel'])) abort('not inside a git repository')
-    const lastTag = tryRead('git', ['describe', '--tags', '--abbrev=0'])
+    const lastTag = lastReleaseTag({ prefix: lintConfig.tagPrefix ?? '' })
     const range =
       rest.find((arg) => !arg.startsWith('-')) ?? (lastTag ? `${lastTag}..HEAD` : 'HEAD')
     // Merges carry no prose of their own, and %s is enough: nothing here reads the body.
@@ -1455,15 +1508,92 @@ const parseStepList = (value) =>
 const manifest = existsSync('package.json') ? readJson('package.json') : null
 
 /**
- * Where this project keeps its version, when the config does not say. Checked in order of
- * how definitively each file identifies a repository. `go.mod` resolves to null because Go
- * modules carry no version — the tag is the version.
+ * Files that identify a repository, most definitive first. The first one present is where
+ * the version is read from and written to. `go.mod` is absent because Go modules carry no
+ * version — the tag is the version.
  */
+const MANIFESTS = ['package.json', 'pyproject.toml', 'Cargo.toml', 'VERSION']
+
+/** Where this project keeps its version, when the config does not say. */
 function detectVersionFile() {
-  for (const candidate of ['package.json', 'pyproject.toml', 'Cargo.toml', 'VERSION']) {
-    if (existsSync(candidate)) return candidate
-  }
+  for (const candidate of MANIFESTS) if (existsSync(candidate)) return candidate
   return null
+}
+
+/**
+ * Manifests that name an ecosystem, so a second one present means a second registry. A
+ * bare VERSION file is deliberately not one: it names nothing, and a repository keeping an
+ * unrelated VERSION beside its manifest should not be told the two disagree.
+ */
+const ECOSYSTEM_MANIFESTS = ['package.json', 'pyproject.toml', 'Cargo.toml']
+
+/**
+ * Some repositories release one source tree to two ecosystems at once — a Tauri plugin is
+ * a crate and an npm package, a maturin project is a crate and a wheel — and carry the
+ * version in both manifests. Those bump together with no config.
+ *
+ * The safety rule is that they must already agree. Two manifests on different versions are
+ * two independent version lines, and dragging one to the other's number is a silent, wrong
+ * release; say so and touch nothing instead.
+ *
+ * @returns {string[]} further files to keep in step with the primary version source
+ */
+function detectCompanionFiles(primaryPath, primaryVersion) {
+  const companions = []
+  for (const candidate of ECOSYSTEM_MANIFESTS) {
+    if (candidate === primaryPath || !existsSync(candidate)) continue
+    const found = readVersionFrom({ path: candidate })
+    if (found !== primaryVersion) {
+      warn(
+        `${candidate} is at ${found ?? 'no readable version'} while ${primaryPath} is at ` +
+          `${primaryVersion}, so they are versioned separately — leaving ${candidate} alone.\n` +
+          '       Add it to "versionFiles" in release.config.json to bump them together.',
+      )
+      continue
+    }
+    companions.push(candidate)
+    // The lockfile pins the crate's own version too, so a bump leaves it stale.
+    if (candidate === 'Cargo.toml' && existsSync('Cargo.lock')) companions.push('Cargo.lock')
+  }
+  return companions
+}
+
+/**
+ * Where a language records no version of its own, a project that wants `--version` to work
+ * keeps one in source instead: a Go module has only `go.mod`, which carries no version at
+ * all, so the number lives in a `version.go` the tag is supposed to match.
+ *
+ * These mirror the tag rather than define it — `go get` resolves a tag, not a constant —
+ * so they are detected as files to keep in step, never as the source of truth.
+ *
+ * A candidate is adopted only when it already carries the current version, the same rule
+ * the companion manifests use. Here it does a second job: it rules out the `var Version =
+ * "dev"` placeholder that a build replaces with -ldflags, which is not a version to bump
+ * and is common enough that warning about it every release would be pure noise. Mismatches
+ * are therefore skipped silently, unlike a manifest on its own version line.
+ *
+ * Anything outside this table is three lines of `versionFiles` config with a `pattern`;
+ * this covers the convention that comes up without one.
+ */
+const VERSION_MIRRORS = [
+  {
+    // `const Version = "1.2.0"`, `var Version = "1.2.0"`, and the same inside a const
+    // block or with an explicit `string` type.
+    pattern: '^\\s*(?:const\\s+|var\\s+)?[Vv]ersion\\s*(?:string\\s*)?=\\s*"(.+)"',
+    paths: ['version.go', 'internal/version/version.go', 'pkg/version/version.go'],
+  },
+]
+
+/** @returns {{path: string, pattern: string}[]} source files already carrying `version` */
+function detectVersionMirrors(version) {
+  const found = []
+  for (const { paths, pattern } of VERSION_MIRRORS) {
+    for (const path of paths) {
+      if (!existsSync(path)) continue
+      if (readVersionFrom({ path, pattern }) === version) found.push({ path, pattern })
+    }
+  }
+  return found
 }
 
 /**
@@ -1475,6 +1605,26 @@ function detectVersionFile() {
 const PUBLISH_BY_MANIFEST = {
   'package.json': 'npm publish --tag %d',
   'Cargo.toml': 'cargo publish',
+}
+
+/**
+ * A manifest that must not be published says so in itself. Detection honours that: a
+ * private package or an unpublishable crate is one this repository releases by tag alone,
+ * and detecting a command for it would attempt the one thing the manifest forbids.
+ */
+function detectablePublish(path) {
+  if (basename(path) === 'package.json') return !readJson(path).private
+  if (basename(path) === 'Cargo.toml') {
+    const text = readFileSync(path, 'utf8')
+    if (/^publish\s*=\s*false/m.test(text)) return false
+    // A crate built only as a cdylib is a native extension module — what maturin and
+    // napi-rs compile into a wheel or a .node — not a library anyone depends on from
+    // crates.io. Its version travels with the package it is built into, which is why the
+    // two match; publishing it to crates.io is the one thing nobody asked for.
+    const crateTypes = /^crate-type\s*=\s*\[([^\]]*)\]/m.exec(text)?.[1]
+    if (crateTypes?.includes('cdylib') && !crateTypes.includes('rlib')) return false
+  }
+  return true
 }
 
 // An explicit `versionFile: null` means "versions by tag" and must not be re-detected, so
@@ -1502,11 +1652,7 @@ if (versionFile && !existsSync(versionFile.path)) {
  * the version has to be typed out in full every time.
  */
 function versionFromLastTag() {
-  const tag = tryRead('git', ['describe', '--tags', '--abbrev=0'])
-  if (!tag) return null
-  const bare =
-    config.tagPrefix && tag.startsWith(config.tagPrefix) ? tag.slice(config.tagPrefix.length) : tag
-  return parseVersion(bare) ? bare : null
+  return releaseTags()[0]?.version ?? null
 }
 
 const currentVersion = versionFile ? readVersionFrom(versionFile) : versionFromLastTag()
@@ -1524,13 +1670,53 @@ const goModule = existsSync('go.mod')
 const projectName =
   manifest?.name ?? (versionFile ? readNameFrom(versionFile) : null) ?? goModule ?? basename(root)
 
+/**
+ * Manifests found beside the primary one that carry the same version. Detected only when
+ * the project has said nothing about either key: a project that listed its own
+ * `versionFiles` has already answered this question, and quietly appending to that answer
+ * would release files it deliberately left out.
+ */
+const detecting =
+  !!currentVersion &&
+  !Object.hasOwn(userConfig, 'versionFile') &&
+  !Object.hasOwn(userConfig, 'versionFiles')
+const companionFiles = detecting
+  ? [
+      ...(versionFile ? detectCompanionFiles(versionFile.path, currentVersion) : []),
+      ...detectVersionMirrors(currentVersion),
+    ]
+  : []
+if (companionFiles.length) {
+  config.versionFiles = companionFiles
+  note(
+    `also versioned in ${companionFiles.map((entry) => versionSource(entry).path).join(', ')} ` +
+      '(detected)',
+  )
+}
+
+/**
+ * Every file the version is written into: the source of truth first, then the files kept
+ * in step with it. A repository that versions by tag alone has no source of truth here and
+ * may still have mirrors to write — a Go module's `version.go` is exactly that — so this
+ * is what the version step works from, rather than `versionFile` being required.
+ */
+const versionTargets = [versionFile, ...config.versionFiles].filter(Boolean).map(versionSource)
+
 // Same rule as versionFile: an explicit `publish: null` means "publish nothing" and is
 // never re-detected. Unset means "work it out", and working it out can yield nothing.
 if (!Object.hasOwn(userConfig, 'publish')) {
   // Preflight already reports "no publish command configured" when the step runs, so
   // there is nothing to say here — and `runs` is not resolved this early.
-  config.publish =
-    (versionFile ? PUBLISH_BY_MANIFEST[basename(versionFile.path)] : undefined) ?? null
+  //
+  // Two manifests releasing in step means two registries: the npm command comes first
+  // because it is the recoverable one — npm allows an unpublish for 72 hours, crates.io
+  // never does — so a half-finished publish leaves the undoable half undone.
+  const detected = [versionFile, ...companionFiles]
+    .filter(Boolean)
+    .map((entry) => versionSource(entry).path)
+    .filter((path) => PUBLISH_BY_MANIFEST[basename(path)] && detectablePublish(path))
+    .map((path) => PUBLISH_BY_MANIFEST[basename(path)])
+  config.publish = detected.length ? detected : null
 }
 
 // Validate every name that was asked for, not just the ones that survive: a typo in
@@ -1654,7 +1840,7 @@ if (!target) {
 
 const tag = `${config.tagPrefix}${version}`
 const isPrerelease = parseVersion(version).pre.length > 0
-const bumping = !!versionFile && version !== currentVersion && runs('version')
+const bumping = versionTargets.length > 0 && version !== currentVersion && runs('version')
 
 let distTag
 try {
@@ -1681,8 +1867,6 @@ const expand = (template) => expandWith(template, (value) => value)
 const shellQuote = (value) => `'${value.replaceAll("'", `'\\''`)}'`
 const expandShell = (template) => expandWith(template, shellQuote)
 
-const publishCommand = runs('publish') && config.publish ? expandShell(config.publish) : null
-
 /**
  * Registries whose preflight can be run, keyed by the first word of the publish command.
  * Each declares how that CLI answers "who am I" and "does this version already exist";
@@ -1700,13 +1884,58 @@ const REGISTRIES = {
   // uv authenticates with a token from the environment rather than a logged-in session,
   // and skips duplicate uploads itself via --check-url, so there is no version lookup.
   uv: { env: ['UV_PUBLISH_TOKEN', 'UV_PUBLISH_PASSWORD'], login: 'set UV_PUBLISH_TOKEN' },
+  // cargo has no "who am I": crates.io auth is a token, either in the environment or in
+  // the credentials file `cargo login` writes. `cargo info` is the version lookup, and
+  // exits non-zero for a version the index does not carry (cargo 1.82+).
+  cargo: {
+    env: ['CARGO_REGISTRY_TOKEN', 'CARGO_REGISTRIES_CRATES_IO_TOKEN'],
+    credentials: [
+      join(homedir(), '.cargo', 'credentials.toml'),
+      join(homedir(), '.cargo', 'credentials'),
+    ],
+    login: 'run `cargo login`, or set CARGO_REGISTRY_TOKEN',
+    published: (name, v) => ['info', `${name}@${v}`],
+  },
   // For Go the tag is the release; `go list` warms the module proxy and doubles as the
   // check for whether this version is already resolvable.
   go: { published: (name, v) => ['list', '-m', `${name}@${v}`] },
 }
 
-const publishCli = publishCommand?.trim().split(/\s+/)[0]
-const registry = publishCli ? REGISTRIES[publishCli] : null
+/**
+ * Which manifest records the name a registry knows this project by, when it is not the one
+ * `projectName` came from. They are not always the same string: a Tauri plugin publishes as
+ * `@tauri-apps/plugin-x` on npm and `tauri-plugin-x` on crates.io, so looking the crate up
+ * under its npm name would report every version as unpublished.
+ */
+const NAME_MANIFEST_BY_CLI = { cargo: 'Cargo.toml' }
+
+function registryName(cli) {
+  const manifest = NAME_MANIFEST_BY_CLI[cli]
+  if (!manifest) return projectName
+  const source = versionTargets.find((entry) => basename(entry.path) === manifest)
+  return (source && readNameFrom(source)) ?? projectName
+}
+
+/**
+ * `publish` is one command or several, because one source tree can own a package in more
+ * than one ecosystem. They run in the configured order.
+ */
+const publishList = config.publish == null ? [] : [config.publish].flat()
+if (publishList.some((entry) => typeof entry !== 'string')) {
+  abort('publish must be a command string, an array of command strings, or null')
+}
+
+/** Each publish command with the CLI it drives, that CLI's preflight row, and its name. */
+const publishTargets = runs('publish')
+  ? publishList.map((template) => {
+      const command = expandShell(template)
+      const cli = command.trim().split(/\s+/)[0]
+      return { command, cli, registry: REGISTRIES[cli] ?? null, name: registryName(cli) }
+    })
+  : []
+
+/** npm-family commands are the ones a `"private": true` package.json forbids. */
+const NPM_CLIS = new Set(['npm', 'pnpm', 'bun'])
 
 /**
  * CI publishing over OIDC ("trusted publishing") carries no token at all: `whoami` fails
@@ -1751,10 +1980,13 @@ if (autoBump) {
   }
 }
 
-if (bumping && compareVersions(version, currentVersion) <= 0) {
+if (bumping && currentVersion && compareVersions(version, currentVersion) <= 0) {
   fail(`${version} is not greater than the current version ${currentVersion}`)
-} else if (bumping) {
+} else if (bumping && currentVersion) {
   ok(`version ${currentVersion} → ${version}`)
+} else if (bumping) {
+  // No manifest and no tag to read a version from, but files to write one into.
+  ok(`writing ${version} into ${versionTargets.map((source) => source.path).join(', ')}`)
 } else if (versionFile) {
   ok(`releasing the version already in ${versionFile.path} (${version})`)
 } else {
@@ -1848,7 +2080,7 @@ if (!succeeds('git', ['remote', 'get-url', config.remote])) {
 // that is a failure; commit-derived notes merely come out partial, so that is a warning.
 let shallowHidesHistory = false
 if (shallow) {
-  const reachableTag = tryRead('git', ['describe', '--tags', '--abbrev=0'])
+  const reachableTag = lastReleaseTag()
   shallowHidesHistory = !reachableTag
   if (reachableTag) {
     ok(
@@ -1953,37 +2185,59 @@ if (!runs('release')) {
   if (releaseExists) note(`a GitHub release for ${tag} already exists — will skip that step`)
 }
 
-let alreadyPublished = false
-if (!publishCommand) {
-  note(runs('publish') ? 'no publish command configured' : 'publish step not selected')
-} else if (manifest?.private) {
-  fail('package.json is private but a publish command is configured')
-} else if (!registry) {
-  ok(`publish: ${publishCommand}`)
-} else {
+/** Whether one publish CLI can publish at all: OIDC, a token, or a live session. */
+function checkCredentials({ cli, registry }) {
   if (isTrustedPublishing) {
-    ok('trusted publishing (OIDC) — no token needed')
-  } else if (registry.env) {
-    // Token-in-the-environment auth: there is no session to interrogate, only credentials.
+    ok(`${cli}: trusted publishing (OIDC) — no token needed`)
+    return
+  }
+  if (registry.env) {
+    // Token auth: there is no session to interrogate, only credentials to find.
     const found = registry.env.find((name) => process.env[name])
-    if (found) ok(`${publishCli} credentials found (${found})`)
-    else fail(`${publishCli} has no publish credentials — ${registry.login}`)
-  } else if (registry.whoami) {
-    const user = tryRead(publishCli, registry.whoami)
+    if (found) {
+      ok(`${cli} credentials found (${found})`)
+      return
+    }
+    const file = registry.credentials?.find((path) => existsSync(path))
+    if (file) ok(`${cli} credentials found (${file})`)
+    else fail(`${cli} has no publish credentials — ${registry.login}`)
+    return
+  }
+  if (registry.whoami) {
+    const user = tryRead(cli, registry.whoami)
     if (user === null) {
       // npm replaced long-lived tokens with two-hour sessions in December 2025, so the
       // usual cause is an expired session rather than a missing login.
       fail(
-        `${publishCli} is not authenticated — run \`${publishCli} login\`. ` +
+        `${cli} is not authenticated — run \`${cli} login\`. ` +
           'npm logins are two-hour sessions, so an earlier one may have expired.',
       )
-    } else ok(`${publishCli} authenticated (${user || 'unknown user'})`)
+    } else ok(`${cli} authenticated (${user || 'unknown user'})`)
   }
+}
 
-  if (registry.published) {
-    alreadyPublished = succeeds(publishCli, registry.published(projectName, version))
-    if (alreadyPublished) {
-      note(`${projectName}@${version} is already published — will skip the publish step`)
+/** Commands whose version is already on the registry, so the publish step skips them. */
+const alreadyPublished = new Set()
+if (!publishTargets.length) {
+  note(runs('publish') ? 'no publish command configured' : 'publish step not selected')
+} else if (manifest?.private && publishTargets.some((target) => NPM_CLIS.has(target.cli))) {
+  fail('package.json is private but an npm publish command is configured')
+} else {
+  // One CLI can appear more than once; interrogating it twice says the same thing twice.
+  const authenticated = new Set()
+  for (const target of publishTargets) {
+    ok(`publish: ${target.command}`)
+    if (!target.registry) continue
+    if (!authenticated.has(target.cli)) {
+      authenticated.add(target.cli)
+      checkCredentials(target)
+    }
+    if (
+      target.registry.published &&
+      succeeds(target.cli, target.registry.published(target.name, version))
+    ) {
+      alreadyPublished.add(target.command)
+      note(`${target.name}@${version} is already published — will skip \`${target.command}\``)
     }
   }
 }
@@ -2028,12 +2282,25 @@ let draftedNotes = null
 const notesDeferred = !!(dirty && runs('commit'))
 
 /**
+ * Set only when preflight found nothing to release with and left the drafting to the
+ * post-commit step. Deferral has to be recorded rather than re-derived from `notesDeferred`
+ * there: a dirty tree is what makes drafting possible to defer, not what makes it necessary.
+ * A hand-written changelog section has already answered the question, and re-drafting over
+ * it would discard the notes the confirmation prompt showed and append a second section for
+ * the same version.
+ */
+let notesPending = false
+
+/**
  * Notes for a version, in descending order of how much they can be trusted:
  * an assistant's prose when one is configured, otherwise the commits grouped by
  * Conventional Commit type. Only when neither yields anything does GitHub generate them.
  */
 function draftNotesFor(v) {
-  const { lastTag, subjects, commits } = commitsSinceLastTag()
+  // A stable release absorbs the candidates that led to it: their commits are what it
+  // ships, and reading from the last candidate leaves the notes describing the gap
+  // between two candidates rather than the release.
+  const { lastTag, subjects, commits } = commitsSinceLastTag({ stable: !isPrerelease })
   if (!commits.length) return null
 
   // Notes are built from Conventional Commits, so anything not written that way is simply
@@ -2091,6 +2358,7 @@ if (notesSource === 'github') {
   // Generate, either because nothing was written or because a source was named.
   if (!notes) {
     if (notesDeferred) {
+      notesPending = true
       ok(`release notes will be ${assistant ? 'drafted' : 'generated'} after the commit`)
     } else {
       draftedNotes = draftNotesFor(version)
@@ -2211,7 +2479,7 @@ if (dirty && runs('commit')) {
   else mutate('git', ['commit', '-m', commitMessage])
 
   // Now that the commit exists it is part of the release, so the notes can describe it.
-  if (notesDeferred && !dryRun) {
+  if (notesPending && !dryRun) {
     draftedNotes = draftNotesFor(version)
     if (draftedNotes) notes = draftedNotes
   }
@@ -2219,8 +2487,7 @@ if (dirty && runs('commit')) {
 
 if (bumping) {
   step(`Write version ${version}`)
-  for (const entry of [versionFile, ...config.versionFiles]) {
-    const source = versionSource(entry)
+  for (const source of versionTargets) {
     if (!existsSync(source.path)) abort(`versionFiles entry ${source.path} does not exist`)
     if (writeVersionInto(source, version, { dryRun })) {
       staged.push(source.path)
@@ -2299,9 +2566,12 @@ if (runs('push')) {
   mutate('git', ['push', '--follow-tags', config.remote, branch ?? 'HEAD'])
 }
 
-if (publishCommand && !alreadyPublished) {
-  step(`Publish to the registry (dist-tag ${distTag})`)
-  mutateShell(publishCommand)
+for (const target of publishTargets) {
+  if (alreadyPublished.has(target.command)) continue
+  step(
+    `Publish ${target.name} (${target.cli}${NPM_CLIS.has(target.cli) ? `, dist-tag ${distTag}` : ''})`,
+  )
+  mutateShell(target.command)
 }
 
 if (runs('release') && !releaseExists) {
@@ -2337,7 +2607,7 @@ function emitOutputs() {
     name: projectName,
     'dist-tag': distTag,
     steps: STEPS.filter(runs).join(','),
-    published: String(!!publishCommand && !alreadyPublished),
+    published: String(publishTargets.some((target) => !alreadyPublished.has(target.command))),
     'release-url': releaseUrl,
   }
   try {
