@@ -569,7 +569,11 @@ desktop app carries do not have to be written out one by one:
 ```
 
 A pattern matching no files aborts: it was written to keep files in step, and silently
-keeping none of them in step is the failure it was meant to prevent.
+keeping none of them in step is the failure it was meant to prevent. A file the glob
+matched that carries no version is skipped, though — a glob says "every file of this
+shape", and some of them legitimately have none, as a Tauri per-OS overlay does. A file
+you named on purpose is different: being unable to write it fails preflight, before
+anything mutates.
 
 For anything else, give a pattern with one capture group around the version. `versionFiles`
 takes the same entries, so several files stay in sync across formats:
@@ -589,10 +593,7 @@ in one release, across three formats, with no scripting:
 {
   "versionFiles": [
     "apps/desktop/package.json",
-    "apps/desktop/src-tauri/tauri.conf.json",
-    "apps/desktop/src-tauri/tauri.macos.conf.json",
-    "apps/desktop/src-tauri/tauri.windows.conf.json",
-    "apps/desktop/src-tauri/tauri.linux.conf.json",
+    "apps/desktop/src-tauri/tauri.*conf.json",
     "apps/desktop/src-tauri/Cargo.toml",
     "apps/desktop/src-tauri/Cargo.lock"
   ],
@@ -600,6 +601,10 @@ in one release, across three formats, with no scripting:
   "steps": ["version", "changelog", "tag", "push"]
 }
 ```
+
+The glob covers `tauri.conf.json` and every per-OS overlay beside it, including ones added
+later — and the overlays that carry no `version` of their own are skipped rather than
+failing the release.
 
 Stopping at `push` because the tag is what triggers the build pipeline — see
 [Libraries versus apps](#-libraries-versus-apps).

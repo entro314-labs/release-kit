@@ -34,6 +34,14 @@ All notable changes to @entro314labs/release-kit.
   bracketed heading in the document now gets one, so a changelog that never had them is
   repaired in one release. Labels that are not headings are left alone.
 
+- **A `versionFiles` entry with no version in it crashed the release with a raw stack
+  trace, halfway through writing the others.** This is the configuration
+  `tauri-release-kit` documents: a Tauri per-OS overlay carries only the keys it overrides,
+  so it has no `version`, and listing one aborted after other files had already changed. A
+  file matched by a glob is now skipped — a glob says "every file of this shape", and some
+  of them legitimately carry no version — and a file named on purpose fails preflight,
+  before anything mutates, saying what to do about it.
+
 - **Listing a file in `versionFiles` that was not a version file replaced its contents with
   the version.** The whole-file mode is right for a `VERSION` file and catastrophic for a
   README. A file that is not already just a version now aborts with what to do instead.

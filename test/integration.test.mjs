@@ -942,3 +942,51 @@ describe('new contributors', () => {
     assert.ok(!annotation.includes('New Contributors'))
   })
 })
+
+describe('a versionFiles entry with no version in it', () => {
+  const overlays = {
+    'src-tauri/tauri.conf.json': '{\n  "version": "1.0.0",\n  "productName": "App"\n}\n',
+    // A Tauri per-OS overlay holds only the keys it overrides, so it has no version.
+    'src-tauri/tauri.macos.conf.json': '{\n  "bundle": {\n    "targets": ["dmg"]\n  }\n}\n',
+  }
+
+  it('is skipped when a glob matched it', () => {
+    const repo = makeRepo({
+      files: overlays,
+      config: {
+        versionFiles: ['src-tauri/tauri.*conf.json'],
+        publish: null,
+        steps: ['version', 'tag', 'push'],
+      },
+    })
+    const { status, stdout } = release(repo, ['minor', '--yes'])
+    assert.equal(status, 0, stdout)
+    assert.equal(JSON.parse(readFile(repo, 'src-tauri/tauri.conf.json')).version, '1.1.0')
+    assert.equal(
+      readFile(repo, 'src-tauri/tauri.macos.conf.json'),
+      overlays['src-tauri/tauri.macos.conf.json'],
+    )
+  })
+
+  it('fails preflight when it was named on purpose, before anything is written', () => {
+    // It used to discover this while writing the others, aborting with a raw stack trace
+    // after some files had already changed.
+    const repo = makeRepo({
+      files: overlays,
+      config: {
+        versionFiles: ['src-tauri/tauri.conf.json', 'src-tauri/tauri.macos.conf.json'],
+        publish: null,
+        steps: ['version'],
+      },
+    })
+    const { status, stdout } = release(repo, ['minor', '--yes'])
+    assert.equal(status, 1)
+    assert.match(stdout, /tauri\.macos\.conf\.json has no version for release-kit to replace/)
+    assert.ok(!stdout.includes('at writeVersionInto'), 'a clean abort, not a stack trace')
+    assert.equal(
+      JSON.parse(readFile(repo, 'src-tauri/tauri.conf.json')).version,
+      '1.0.0',
+      'nothing was written',
+    )
+  })
+})

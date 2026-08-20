@@ -1709,7 +1709,10 @@ function writeVersionInto(entry, version, { dryRun = false, date } = {}) {
 
   let updated
   if (kind === 'pattern') {
-    if (!shape.test(text)) throw new Error(`${source.path} has no version matching ${shape}`)
+    if (!shape.test(text)) {
+      if (source.optional) return false
+      throw new Error(`${source.path} has no version matching ${shape}`)
+    }
     shape.lastIndex = 0
     // A global pattern rewrites every match rather than the first: a Cargo.lock records
     // one block per crate, and a workspace bump owns all the members inheriting from it.
@@ -2195,7 +2198,10 @@ const versionTargets = [
     if (!source.path.includes('*')) return [source]
     const matched = expandPaths(source.path)
     if (!matched.length) abort(`versionFiles pattern ${source.path} matched no files`)
-    return matched.map((path) => Object.assign({}, source, { path }))
+    // A glob says "every file of this shape", and some of them legitimately carry no
+    // version — a Tauri per-OS overlay holds only the keys it overrides. Being unable to
+    // write one is expected here, unlike a path someone named on purpose.
+    return matched.map((path) => Object.assign({}, source, { path, optional: true }))
   }),
 ]
 
@@ -2517,6 +2523,28 @@ if (autoBump) {
   ok(`auto: ${autoBump.bump} — ${reason}`)
   for (const subject of [...autoBump.breaking, ...autoBump.features].slice(0, 5)) {
     console.log(dim(`       ${subject}`))
+  }
+}
+
+// Writing the version is the first mutating step, and it used to discover a file it
+// could not write *while writing the others* — aborting with a raw stack trace after
+// some of them had already changed. Every target is checked here instead.
+if (bumping) {
+  for (const source of versionTargets) {
+    if (!existsSync(source.path)) {
+      fail(`versionFiles entry ${source.path} does not exist`)
+      continue
+    }
+    if (source.optional) continue
+    const text = readFileSync(source.path, 'utf8')
+    const { kind, shape } = versionMode(source, text)
+    if (kind === 'pattern' && !shape.test(text)) {
+      fail(
+        `${source.path} has no version for release-kit to replace.\n` +
+          '       Remove it from versionFiles, mark the line with x-release-kit-version, ' +
+          'or give the entry a "pattern".',
+      )
+    }
   }
 }
 
