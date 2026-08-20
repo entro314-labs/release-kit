@@ -549,8 +549,9 @@ FROM acme:1.2   # x-release-kit-minor
 ```
 ````
 
-`-major`, `-minor`, `-patch` and `-date` write a piece of the release instead of the whole
-version, and `x-release-kit-start-<scope>` … `x-release-kit-end` covers a run of lines
+`-major`, `-minor`, `-patch`, `-date` and `-version-date` write a piece of the release
+instead of the whole version — `-version-date` covers both on one line, which is the shape
+of an AppStream `<release version="…" date="…"/>` tag — and `x-release-kit-start-<scope>` … `x-release-kit-end` covers a run of lines
 rather than commenting each one. Just list the file:
 
 ```json

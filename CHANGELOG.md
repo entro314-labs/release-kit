@@ -55,9 +55,10 @@ All notable changes to @entro314labs/release-kit.
   through exactly the code the release uses.
 
 - **Version markers.** A comment on the line that carries the number says which of a file's
-  numbers is the version, so a README install line, a badge URL or a Dockerfile tag can be
-  kept in step without writing a regex per file: `x-release-kit-version`, with `-major`,
-  `-minor`, `-patch` and `-date` for a piece of it, and
+  numbers is the version, so a README install line, a badge URL, a Dockerfile tag or an
+  AppStream `<release>` tag can be kept in step without writing a regex per file:
+  `x-release-kit-version`, with `-major`, `-minor`, `-patch`, `-date` and `-version-date`
+  for a piece of it, and
   `x-release-kit-start-<scope>` … `x-release-kit-end` for a run of lines. Reading and
   writing share one resolver, so they cannot disagree about where a file's version lives:
   an explicit `pattern` wins, then markers, then the shape the extension implies, then the

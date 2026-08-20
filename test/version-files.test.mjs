@@ -224,3 +224,15 @@ describe('a file that is neither marked, patterned, nor just a version', () => {
     assert.equal(readFileSync(path, 'utf8'), '1.1.0\n')
   })
 })
+
+describe('the version-date marker', () => {
+  it('writes both on one line, which is the shape of an AppStream release tag', () => {
+    const path = join(scratch(), 'app.metainfo.xml')
+    writeFileSync(
+      path,
+      '<releases>\n  <release version="1.0.0" date="2026-01-01"/> <!-- x-release-kit-version-date -->\n</releases>\n',
+    )
+    kit.writeVersionInto({ path }, '1.4.0', { date: '2026-08-21' })
+    assert.match(readFileSync(path, 'utf8'), /<release version="1\.4\.0" date="2026-08-21"\/>/)
+  })
+})

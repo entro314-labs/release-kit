@@ -1622,8 +1622,11 @@ function readVersionFrom(entry) {
  *   ```
  *   <!-- x-release-kit-end -->
  */
-const MARKER_INLINE = /x-release-kit-(major|minor|patch|version|date)\b/
-const MARKER_START = /x-release-kit-start-(major|minor|patch|version|date)\b/
+// `version-date` comes first: the alternation is ordered, and `version` would otherwise
+// match its prefix and leave the date alone.
+const SCOPES = 'version-date|major|minor|patch|version|date'
+const MARKER_INLINE = new RegExp(`x-release-kit-(${SCOPES})\\b`)
+const MARKER_START = new RegExp(`x-release-kit-start-(${SCOPES})\\b`)
 const MARKER_END = /x-release-kit-end\b/
 const MARKER_VERSION = /\d+\.\d+\.\d+(?:-[0-9a-z.-]+)?(?:\+[0-9a-z.-]+)?/i
 const MARKER_NUMBER = /\b\d+\b/
@@ -1649,6 +1652,8 @@ function applyVersionMarkers(text, version, date) {
     patch: [MARKER_NUMBER, String(patch)],
     date: [MARKER_DATE, date],
   }
+  // One line carrying both, which is the shape of an AppStream <release> tag.
+  const versionAndDate = (line) => line.replace(MARKER_VERSION, version).replace(MARKER_DATE, date)
   let scope = null
   return text
     .split('\n')
@@ -1667,6 +1672,7 @@ function applyVersionMarkers(text, version, date) {
       }
       const active = inline ?? scope
       if (!active) return line
+      if (active === 'version-date') return versionAndDate(line)
       const [shape, value] = replacements[active]
       return line.replace(shape, value)
     })
