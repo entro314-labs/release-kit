@@ -676,3 +676,15 @@ describe('which tag a release reads history from', () => {
     assert.ok(!annotation.includes('big new dashboard'), 'rc.1 content is not repeated')
   })
 })
+
+describe('pushing the commit and the tag', () => {
+  it('sends them as one transaction', () => {
+    // --follow-tags decides which refs go; --atomic decides whether they go together.
+    // Without the second, a server may take the branch and reject the tag.
+    const repo = makeRepo({ config: { publish: null, steps: ['version', 'tag', 'push'] } })
+    const { status, stdout } = release(repo, ['minor', '--yes'])
+    assert.equal(status, 0, stdout)
+    assert.match(stdout, /git push --follow-tags --atomic origin main/)
+    assert.deepEqual(tagsOnRemote(repo), ['v1.1.0'])
+  })
+})

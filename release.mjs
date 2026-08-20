@@ -925,6 +925,43 @@ function mutate(command, args, options = {}) {
 }
 
 /**
+ * Push the release commit and its tag as one transaction.
+ *
+ * `--follow-tags` and `--atomic` answer different questions: the first decides *which*
+ * refs are sent, the second decides whether they land together. With only the first, a
+ * server is free to accept the branch and reject the tag — which is precisely the split
+ * this step exists to prevent, leaving a release commit on the remote with no tag, or a
+ * tag with no commit behind it.
+ *
+ * Not every server implements the atomic capability, so a refusal on those grounds falls
+ * back to the plain push. Nothing else does: a rejected non-fast-forward retried without
+ * `--atomic` would push one ref and not the other, which is worse than failing.
+ */
+function pushBranchAndTag(branchRef) {
+  const args = ['push', '--follow-tags', config.remote, branchRef]
+  const atomic = ['push', '--follow-tags', '--atomic', config.remote, branchRef]
+  const line = formatCommand('git', atomic)
+  if (dryRun) {
+    console.log(`  ${yellow('would run:')} ${line}`)
+    return
+  }
+  console.log(`  ${dim(`$ ${line}`)}`)
+  try {
+    execFileSync('git', atomic, { stdio: ['pipe', 'inherit', 'pipe'] })
+    return
+  } catch (err) {
+    const stderr = `${err.stderr ?? ''}`
+    process.stderr.write(stderr)
+    if (!/atomic/i.test(stderr)) abortMidRelease(line)
+  }
+  warn(
+    `${config.remote} does not support atomic pushes — sending the branch and tag in one ` +
+      'call, but not as one transaction',
+  )
+  mutate('git', args)
+}
+
+/**
  * Mutating shell command, for configured strings like `publish` that are written as a
  * whole command line rather than an argv. Shell metacharacters are the author's to own.
  */
@@ -2561,9 +2598,7 @@ if (runs('tag') && !taggedCommit) {
 
 if (runs('push')) {
   step(`Push branch and tag to ${config.remote}`)
-  // --follow-tags sends the commit and the tag in one call; pushing them separately is how
-  // a tag ends up on the remote without its commit, or a release without its tag.
-  mutate('git', ['push', '--follow-tags', config.remote, branch ?? 'HEAD'])
+  pushBranchAndTag(branch ?? 'HEAD')
 }
 
 for (const target of publishTargets) {
