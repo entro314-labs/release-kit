@@ -32,3 +32,25 @@ jobs:
       - run: pnpm run format:check
       - run: pnpm run lint:ci
       - run: pnpm test
+
+  # Local commit-msg hooks cannot see this: a squash merge takes its subject from the pull
+  # request title, and that title is the commit release-kit will parse into the changelog
+  # and the version bump. Titles reach the shell through env, never through interpolation.
+  commits:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0 # the range below spans the whole branch
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Lint the pull request title
+        env:
+          TITLE: ${{ github.event.pull_request.title }}
+        run: node release.mjs lint-commits --subject "$TITLE"
+      - name: Lint the commits on the branch
+        env:
+          RANGE: ${{ github.event.pull_request.base.sha }}..${{ github.event.pull_request.head.sha }}
+        run: node release.mjs lint-commits "$RANGE"

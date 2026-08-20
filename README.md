@@ -189,6 +189,37 @@ Prerelease bumps need `--preid` unless the current version already carries one t
 | `--sync <dir>...`            | Copy this script into other projects and exit. Touches no git state.       |
 | `--help`, `-h`               | Full flag list.                                                            |
 
+### Linting commits
+
+A subject that is not Conventional Commits is invisible: it contributes nothing to the
+inferred bump and never reaches the changelog. `lint-commits` checks subjects against the
+same parser the release uses, so the gate and the release can never disagree about what
+counts.
+
+```bash
+release-kit lint-commits                      # since the last tag
+release-kit lint-commits main..HEAD           # an explicit range
+release-kit lint-commits --subject "feat: x"  # one subject — a pull request title
+```
+
+It exits non-zero on a subject the release cannot read. A type outside the changelog table
+— `security:`, `i18n:` — is a warning, not a failure: those still get printed, under _Other
+Changes_. Release commits, merges and `fixup!`/`squash!` markers are skipped, per the same
+`ignoreCommits` config the release notes use.
+
+Local commit-msg hooks cannot cover the case that matters most. If you squash-merge, the
+commit released is the **pull request title**, which no hook ever sees — check it in CI:
+
+```yaml
+- name: Lint the pull request title
+  env:
+    TITLE: ${{ github.event.pull_request.title }}
+  run: npx @entro314labs/release-kit@2.8.0 lint-commits --subject "$TITLE"
+```
+
+Pass the title through `env`, never through `${{ }}` inside `run:` — a pull request title is
+attacker-controlled text and interpolating it into a shell command is a script injection.
+
 ## 🧩 Steps
 
 A release is seven named steps. They always run in this order — `steps` selects which of
@@ -477,11 +508,11 @@ Two upstream habits make commit-derived notes trustworthy, and neither is releas
   check workflow succeeds, with `if: github.repository_owner == 'your-org'` so a fork never
   tries to release.
 - **Validate pull request titles.** A squash-merge takes its subject from the PR title, so
-  that title becomes the commit the notes are built from.
-  [`amannn/action-semantic-pull-request`](https://github.com/amannn/action-semantic-pull-request)
-  enforces it. Without something like it, work silently goes missing from release notes —
-  release-kit says how many commits are not Conventional Commits, but it cannot fix them
-  after the fact.
+  that title becomes the commit the notes are built from. Check it with
+  [`lint-commits`](#linting-commits), which uses this tool's own parser rather than a second
+  opinion about the grammar. Without something like it, work silently goes missing from
+  release notes — release-kit says how many commits are not Conventional Commits, but it
+  cannot fix them after the fact.
 
 Three things CI does that are worth knowing about:
 

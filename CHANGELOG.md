@@ -17,6 +17,14 @@ All notable changes to @entro314labs/release-kit.
 
 ### Added
 
+- **`lint-commits`** — a subcommand that checks commit subjects against the parser the
+  release itself uses, so a commit gate and the changelog can never disagree about the
+  grammar. `lint-commits [<range>]` checks a range (default: since the last tag);
+  `lint-commits --subject <text>` checks one subject, which is how a pull request title
+  gets validated before a squash merge turns it into the commit the notes are built from —
+  the one case no local commit-msg hook can see. A subject the release cannot read fails;
+  a type with no changelog section only warns, because those are still printed under
+  _Other Changes_.
 - **`verify`** — a config key naming the project's own gate (`"verify": "pnpm check"`),
   run during preflight. A failing gate now aborts while nothing has mutated, instead of a
   `prepublishOnly` hook failing at the publish step — after the commit, the tag and the
@@ -28,6 +36,10 @@ All notable changes to @entro314labs/release-kit.
 
 ### Changed
 
+- **`deps:` is a type the drafter can produce.** The list of types in the commit-drafting
+  prompt was maintained by hand and had drifted from `CHANGELOG_SECTIONS`, omitting `deps`
+  — so an assistant could never write a subject for the Dependencies section the changelog
+  has always had. Both are now derived from that one table.
 - **The shallow-clone check is predictive instead of blanket.** A shallow clone with the
   previous release tag reachable hides nothing the release reads, and now passes with an
   `ok`. One with no reachable tag provably truncates history: that fails `auto` (the bump

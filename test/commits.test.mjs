@@ -205,3 +205,67 @@ describe('types outside the table', () => {
     )
   })
 })
+
+describe('lintSubjects', () => {
+  const lint = (...subjects) =>
+    kit.lintSubjects(subjects.map((s) => ({ hash: 'abc1234', subject: s })))
+
+  it('passes the subjects the changelog can file', () => {
+    assert.deepEqual(
+      lint('feat: a', 'fix(core): b', 'chore!: c', 'deps: bump serde', 'feature: legacy alias'),
+      [],
+    )
+  })
+
+  it('fails prose, because the bump and the changelog both skip it', () => {
+    const [finding] = lint('added a thing')
+    assert.equal(finding.level, 'error')
+    assert.equal(finding.subject, 'added a thing')
+    assert.equal(finding.hash, 'abc1234')
+    assert.match(finding.reason, /not Conventional Commits/)
+  })
+
+  it('fails a header that only looks conventional', () => {
+    for (const bad of ['feat x', 'feat:', 'feat:no space', '']) {
+      assert.equal(lint(bad)[0]?.level, 'error', JSON.stringify(bad))
+    }
+  })
+
+  it('tolerates an uppercase type, because parseCommit folds it', () => {
+    // Worth pinning: the linter is only allowed to fail what the release actually mishandles,
+    // and `Feat:` bumps and files exactly as `feat:` does.
+    assert.equal(
+      kit.inferBump([{ hash: 'a', subject: 'Feat: x', body: '' }], '1.0.0').bump,
+      'minor',
+    )
+    assert.deepEqual(lint('Feat: x'), [])
+  })
+
+  it('only warns for a type with no section, which is still printed', () => {
+    const findings = lint('security: patch a CVE', 'i18n: add Greek')
+    assert.deepEqual(
+      findings.map((f) => f.level),
+      ['warn', 'warn'],
+    )
+    assert.match(findings[0].reason, /Other Changes/)
+  })
+
+  it('accepts a subject with no hash, as a pull request title has none', () => {
+    assert.deepEqual(kit.lintSubjects([{ subject: 'feat: a' }]), [])
+    assert.equal(kit.lintSubjects([{ subject: 'a' }])[0].hash, '')
+  })
+})
+
+describe('the type table is the only list of types', () => {
+  it('accepts every changelog type, so nothing is filed but unwritable', () => {
+    for (const type of kit.CHANGELOG_TYPES) {
+      assert.match(`${type}: x`, kit.CONVENTIONAL_RE, type)
+      assert.deepEqual(kit.lintSubjects([{ subject: `${type}: x` }]), [])
+    }
+  })
+
+  it('knows the feature alias changelogFromCommits folds into Features', () => {
+    assert.ok(kit.KNOWN_TYPES.has('feature'))
+    assert.match(kit.changelogFromCommits([c('a', 'feature: x')]), /### Features\n\n- x/)
+  })
+})

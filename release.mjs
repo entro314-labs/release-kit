@@ -165,6 +165,13 @@ Target (optional; defaults to the version already in package.json):
 Steps, in the fixed order they run. All but "commit" run by default:
   ${STEPS.join('  ')}
 
+Subcommands (they check or copy, and never start a release):
+  lint-commits [<range>]
+                       check commit subjects against Conventional Commits
+                       (default range: since the last tag)
+  lint-commits --subject <text>
+                       check one subject — a pull request title before it is squashed
+
 Flags:
   --only <steps>       run only these steps, comma-separated
   --skip <steps>       run every step except these
@@ -227,8 +234,8 @@ const formatStatus = (porcelain) =>
     })
     .join('\n')
 
-function abort(message) {
-  console.log(`\n${red(bold('RELEASE ABORTED'))} — ${message}\n`)
+function abort(message, title = 'RELEASE ABORTED') {
+  console.log(`\n${red(bold(title))} — ${message}\n`)
   process.exit(1)
 }
 
@@ -673,8 +680,59 @@ function fallbackCommitMessage(files) {
   return body ? `${subject}\n\n${body}` : subject
 }
 
-const CONVENTIONAL_TYPES = 'build|chore|ci|docs|feat|fix|perf|refactor|revert|style|test'
-const CONVENTIONAL_RE = new RegExp(`^(${CONVENTIONAL_TYPES})(\\([^)]+\\))?!?: .+`)
+/**
+ * The types worth writing: every one has a changelog section of its own.
+ *
+ * Derived from CHANGELOG_SECTIONS rather than written out again, because the hand-kept
+ * copy had already drifted — it omitted `deps`, so the drafter could never produce a
+ * subject for the Dependencies section the changelog has always had.
+ */
+const CHANGELOG_TYPES = CHANGELOG_SECTIONS.map((s) => s.type)
+
+/** The drafter's types plus `feature`, the alias `changelogFromCommits` folds into feat. */
+const KNOWN_TYPES = new Set([...CHANGELOG_TYPES, 'feature'])
+const CONVENTIONAL_RE = new RegExp(`^(${[...KNOWN_TYPES].join('|')})(\\([^)]+\\))?!?: .+`)
+
+/**
+ * Check commit subjects against the grammar the rest of this file reads.
+ *
+ * Two severities, because the two failures do not cost the same:
+ *
+ *  - A subject `parseCommit` cannot read is invisible. It contributes nothing to the
+ *    inferred bump and never reaches the changelog, so the work simply disappears.
+ *  - A type outside CHANGELOG_SECTIONS is merely unfiled: `changelogFromCommits` still
+ *    prints it under "Other Changes". `security:` and `i18n:` warn rather than fail —
+ *    refusing them would make this stricter than the tool it is meant to protect.
+ *
+ * Case is not one of the failures: `parseCommit` folds the type, so `Feat:` bumps and files
+ * exactly as `feat:` does. The drafter is stricter about its own output than this is about
+ * anybody's commits, and deliberately so.
+ *
+ * @param {{subject: string, hash?: string}[]} commits
+ * @returns {{subject: string, hash: string, level: 'error'|'warn', reason: string}[]}
+ */
+function lintSubjects(commits) {
+  const findings = []
+  for (const { subject, hash = '' } of commits) {
+    const parsed = parseCommit(subject)
+    if (!parsed) {
+      findings.push({
+        subject,
+        hash,
+        level: 'error',
+        reason: `not Conventional Commits — expected "<type>(<scope>): <description>" with type one of ${CHANGELOG_TYPES.join(', ')}`,
+      })
+    } else if (!KNOWN_TYPES.has(parsed.type)) {
+      findings.push({
+        subject,
+        hash,
+        level: 'warn',
+        reason: `type "${parsed.type}" has no changelog section — it lands under "Other Changes"`,
+      })
+    }
+  }
+  return findings
+}
 
 /**
  * Draft a Conventional Commits message for the staged changes.
@@ -691,7 +749,7 @@ function draftCommitMessage() {
     'Write a Conventional Commits message for these staged changes.',
     '',
     'Rules:',
-    `- Subject: "<type>(<optional scope>): <description>" where type is one of ${CONVENTIONAL_TYPES.split('|').join(', ')}.`,
+    `- Subject: "<type>(<optional scope>): <description>" where type is one of ${CHANGELOG_TYPES.join(', ')}.`,
     '- Subject in the imperative mood, no trailing period, under 72 characters.',
     '- Add a body only if the change needs explanation; separate it with a blank line.',
     '- Output the raw commit message and nothing else: no markdown fences, no preamble.',
@@ -1052,6 +1110,10 @@ function rollUnreleased(text, version, date) {
 
 const readJson = (path) => JSON.parse(readFileSync(path, 'utf8'))
 
+/** The project's release.config.json, or {} when it has none. */
+const readUserConfig = () =>
+  existsSync('release.config.json') ? readJson('release.config.json') : {}
+
 /**
  * Where a project keeps its version. The format is inferred from the file name, so the
  * common cases need nothing but a path:
@@ -1245,6 +1307,69 @@ if (flag('--sync')) {
   process.exit(0)
 }
 
+// lint-commits checks subjects and exits; like --sync it starts no release. It is handled
+// before the positional parsing below because it takes a range, and a second positional is
+// otherwise a mistake.
+if (argv[0] === 'lint-commits') {
+  const rest = argv.slice(1)
+  const subjectAt = rest.indexOf('--subject')
+  const ignored = { ...DEFAULTS, ...readUserConfig() }.ignoreCommits.map(
+    (pattern) => new RegExp(pattern, 'i'),
+  )
+
+  let subjects
+  let scope
+  if (subjectAt !== -1) {
+    // A squash merge takes its subject from the pull request title, which is therefore the
+    // commit this repository will parse — and the one no commit-msg hook ever sees.
+    const text = rest[subjectAt + 1]
+    if (text === undefined) abort('--subject needs the text to check', 'COMMIT LINT FAILED')
+    subjects = [{ hash: '', subject: text.trim() }]
+    scope = null
+  } else {
+    if (!tryRead('git', ['rev-parse', '--show-toplevel'])) abort('not inside a git repository')
+    const lastTag = tryRead('git', ['describe', '--tags', '--abbrev=0'])
+    const range =
+      rest.find((arg) => !arg.startsWith('-')) ?? (lastTag ? `${lastTag}..HEAD` : 'HEAD')
+    // Merges carry no prose of their own, and %s is enough: nothing here reads the body.
+    const raw = tryRead('git', ['log', '--no-merges', '--format=%h%x1f%s', range])
+    if (raw === null) {
+      abort(
+        `\`git log ${range}\` failed — is that a range in this repository?`,
+        'COMMIT LINT FAILED',
+      )
+    }
+    subjects = raw
+      .split('\n')
+      .filter(Boolean)
+      .map((line) => {
+        const [hash, subject = ''] = line.split('\u001F')
+        return { hash: hash.trim(), subject: subject.trim() }
+      })
+      // The bookkeeping `commitsSinceLastTag` drops for the same reason: a release commit,
+      // a merge or an autosquash marker is nobody's prose to fix.
+      .filter(({ subject }) => subject && !ignored.some((re) => re.test(subject)))
+    scope = range
+  }
+
+  const findings = lintSubjects(subjects)
+  for (const { hash, subject, level, reason } of findings) {
+    const label = level === 'error' ? red('error') : yellow('warn')
+    console.log(`  ${label} ${hash ? `${dim(hash)} ` : ''}${subject}\n        ${dim(reason)}`)
+  }
+  const errors = findings.filter((f) => f.level === 'error').length
+  if (errors) {
+    abort(
+      `${errors} subject${errors === 1 ? '' : 's'} the changelog and the version bump cannot read`,
+      'COMMIT LINT FAILED',
+    )
+  }
+  const counted = `${subjects.length} subject${subjects.length === 1 ? '' : 's'}`
+  const unfiled = findings.length ? `, ${findings.length} unfiled` : ''
+  ok(`${scope ? `${scope}: ` : ''}${counted} valid${unfiled}`)
+  process.exit(0)
+}
+
 /**
  * Options that consume the argument after them. Without this list a positional target is
  * found by guessing, and `--only tag,push` gets read as the version to release.
@@ -1305,7 +1430,7 @@ if (existsSync(localManifest) && localManifest !== rootManifest) {
 }
 process.chdir(root)
 
-const userConfig = existsSync('release.config.json') ? readJson('release.config.json') : {}
+const userConfig = readUserConfig()
 const config = { ...DEFAULTS, ...userConfig }
 const unknownKeys = Object.keys(config).filter((key) => !(key in DEFAULTS))
 if (unknownKeys.length) abort(`release.config.json has unknown keys: ${unknownKeys.join(', ')}`)
