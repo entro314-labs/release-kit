@@ -19,7 +19,21 @@ limit during development. Treat it as untested until someone runs a release with
 
 ## Resolved
 
-- **The package shipped no tests.** 63 tests across 6 suites now live in `test/`, run by
+- **Four defects found by reading changie, commitizen, git-cliff,
+  github-changelog-generator, release-please, `@jscutlery/semver` and Ship.js against this
+  file.** Each was reproduced against a real repository before being fixed, and each has a
+  test named after what actually went wrong: the last release resolved from the nearest tag
+  rather than the highest version tag (so one rolling `latest-beta` marker aborted a
+  release); a stable release reading history from the release candidate below it (so
+  promoting `2.0.0-rc.2` shipped notes describing nothing); `--follow-tags` without
+  `--atomic`; and version headings written as link references with no definitions ever
+  written. See CHANGELOG.md for the full accounting.
+
+- **`versionFiles` could shred a file.** The whole-file mode is right for a `VERSION` file
+  and catastrophic for anything else; listing a README replaced it with the version. It now
+  refuses, and version markers give that file a way to be listed safely.
+
+- **The package shipped no tests.** 188 tests across 8 suites now live in `test/`, run by
   `node --test` with no framework: version arithmetic differentially checked against the real
   `semver` package, changelog reading and rolling, commit parsing and bump inference, draft
   sanitising, version-file rewriting including the `Cargo.lock` scoping hazard, and
@@ -84,6 +98,15 @@ Two corrections to the original list, so they are not built as stated:
   `microsoft/winget-pkgs`. That is a submission workflow, not a publish command, and it
   belongs with the build-and-publish tools below rather than in this table.
 
+### Lockfiles beyond the three that are handled
+
+`package-lock.json`, `npm-shrinkwrap.json` and `uv.lock` are refreshed by the tool that
+owns them; `Cargo.lock` is kept in step as a version file. `bun.lock` is the obvious next
+one and was deliberately left out: whether `bun install` has a lockfile-only mode that is
+stable across the versions people run has not been checked, and refreshing a lockfile with
+the wrong command is worse than leaving it stale. `pnpm-lock.yaml` records no root version
+and needs nothing.
+
 ### Detecting more project files
 
 Currently detected: `package.json`, `pyproject.toml`, `Cargo.toml`, `VERSION`, plus the
@@ -125,6 +148,15 @@ Recorded so they are not rediscovered as ideas.
 | Importing signing keys from environment variables | Writing a private key to disk from an environment variable is a footgun: persisted file, wrong permissions, easy to leak into logs. `webfactory/ssh-agent` and `crazy-max/ghaction-import-gpg` do it properly.                                                                                  |
 | A compiled binary, to drop the Node requirement   | Would genuinely help Rust, Python and Go users, who currently must install Node. But it ends the "one file you can read, vendor, and pipe into `node`" property, and adds a build and release matrix. Worth revisiting only if non-Node adoption makes the Node requirement the actual blocker. |
 
+### Rewriting internal dependency ranges for Cargo
+
+release-please's `cargo-toml.ts` rewrites the `version` of every path dependency in a
+manifest, not just the package's own. That is exactly what `train.mjs` needs to release a
+Rust workspace in dependency order — and exactly why it is not in `release.mjs`: a single
+package release has no internal ranges to rewrite. It belongs with the orchestrator, when
+the orchestrator's execution phase exists. Recorded in TRAIN.md rather than built now,
+since code with no caller is the thing this repository refuses everywhere else.
+
 ## Open questions
 
 Things that need investigation before they could even be scoped.
@@ -132,9 +164,10 @@ Things that need investigation before they could even be scoped.
 - **Forges other than GitHub.** The `release` step is `gh` and nothing else. GitLab and Gitea
   have their own CLIs and release APIs. Whether that is a step-level abstraction or simply
   out of scope is undecided; nobody has asked for it.
-- **Prerelease promotion.** Cutting `2.0.0-rc.1` works, and promoting it to `2.0.0` is a
-  plain `patch`. Whether the dist-tag should then move, and whether prior release candidates
-  should be marked superseded, has not been thought through.
+- **Prerelease promotion.** The notes half is answered: a stable release reads history from
+  the last stable tag, absorbing the candidates that led to it. What is still open is
+  whether the dist-tag should move off the prerelease channel on promotion, and whether
+  prior release candidates should be marked superseded on the forge.
 - **Assistant cost.** Each drafting call allows 180 seconds and a release can make two.
   There is no budget, no token accounting, and no way to cap spend.
 - **How much the deterministic changelog reduces the case for an assistant.** Grouping

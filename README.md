@@ -10,7 +10,7 @@
 [![downloads](https://img.shields.io/npm/dm/@entro314labs/release-kit?color=cb3837)](https://www.npmjs.com/package/@entro314labs/release-kit)
 [![unpacked size](https://img.shields.io/npm/unpacked-size/@entro314labs/release-kit?color=blueviolet)](https://www.npmjs.com/package/@entro314labs/release-kit?activeTab=code)
 [![dependencies](https://img.shields.io/badge/dependencies-0-brightgreen)](#-requirements)
-[![node](https://img.shields.io/badge/node-%E2%89%A5%2018-339933?logo=node.js&logoColor=white)](#-requirements)
+[![node](https://img.shields.io/badge/node-%E2%89%A5%2022-339933?logo=node.js&logoColor=white)](#-requirements)
 [![license](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
 
 </div>
@@ -56,6 +56,7 @@ Released v2.5.0
 | [⚡ Usage](#-usage)                                                     | targets, bumps, flags                   |
 | [🧩 Steps](#-steps)                                                     | the seven steps and how to select them  |
 | [📚 Libraries versus apps](#-libraries-versus-apps)                     | which steps you want, and why           |
+| [🪝 Hooks](#-hooks)                                                     | commands between the steps              |
 | [🤖 Assistant](#-assistant-optional)                                    | optional AI drafting                    |
 | [🌍 Any language](#-any-language)                                       | Rust, Python, tag-only, anything        |
 | [🚂 Release trains](#-release-trains)                                   | monorepos and multi-repo workspaces     |
@@ -126,7 +127,7 @@ Pin the URL to a tag, never `main`: piping an unpinned remote script into an int
 means whatever is at that URL runs against your repository and your credentials. `--sync` is
 the one thing that does not work this way — copying itself needs a file on disk.
 
-> **All five paths run the same file and need Node 18+.** That includes the Rust, Python and
+> **All five paths run the same file and need Node 22+.** That includes the Rust, Python and
 > Go projects: `release-kit` is a Node program regardless of what it is releasing.
 
 Zero-config works on the conventions below; add a [`release.config.json`](#️-configuration)
@@ -141,6 +142,16 @@ pnpm release minor                # bump from the current version
 pnpm release prerelease --preid beta
 pnpm release -- --dry-run         # print every step, execute nothing
 pnpm release -- --help
+```
+
+`next` answers "what version would this release?" and stops. Only the version reaches
+stdout, so it substitutes into a command; everything it would otherwise narrate goes to
+stderr, where a human still reads it.
+
+```sh
+release-kit next            # the version already in the manifest
+release-kit next minor      # what a minor bump would release
+release-kit next auto       # what the commits imply — the same inference the release uses
 ```
 
 The target is optional. With no target it releases whatever version `package.json`
@@ -231,7 +242,7 @@ them execute, it never reorders them.
 | `version`   | on      | Write the version into `package.json` and `versionFiles`                                           |
 | `changelog` | on      | Roll `[Unreleased]` into the version, or add drafted notes                                         |
 | `tag`       | on      | Annotated git tag carrying the release notes                                                       |
-| `push`      | on      | Push the branch and tag together (`--follow-tags`)                                                 |
+| `push`      | on      | Push the branch and tag as one transaction (`--follow-tags --atomic`)                              |
 | `publish`   | on      | Run the configured `publish` command                                                               |
 | `release`   | on      | Create the GitHub release                                                                          |
 
@@ -275,9 +286,23 @@ Notes resolve in this order:
    bullet links to its commit, and `closes #12` / `fixes #34` in a message becomes a link to
    the issue. A `BREAKING CHANGE:` footer is used in place of the subject, since it explains
    the break. A commit reverted within the same release drops out along with its revert.
-   All deterministic and needing nothing installed, so decent notes are the default rather
-   than something that requires an assistant.
+   A **New Contributors** section names anyone whose first commit to the repository is in
+   this release — derived from the git history rather than a forge API, so it needs no
+   token and works offline, and it is skipped on a first release where everyone would be
+   new. All deterministic and needing nothing installed, so decent notes are the default
+   rather than something that requires an assistant.
 4. Otherwise GitHub generates them from the commits since the previous tag.
+
+**Which tag the history is read from** is the highest version tag carrying the configured
+prefix that is reachable from `HEAD` — not the nearest tag. A repository carrying tags that
+are not releases (a rolling `latest-beta` marker, a `nightly`) is unaffected by them, and a
+patch tagged on top of a later minor does not drag the baseline backwards.
+
+**A stable release absorbs the candidates that led to it.** Releasing `2.0.0` after
+`2.0.0-rc.1` and `-rc.2` reads history from the last _stable_ tag, so the notes describe
+everything the release ships rather than the gap between the last two candidates — which
+is usually just the release commit. Releasing a candidate is unchanged: each one's notes
+say what changed in that candidate.
 
 `--notes <source>` forces one instead of walking that list: `changelog`, `assistant`,
 `commits`, or `github`. A named source that produces nothing is an error rather than a
@@ -289,6 +314,14 @@ does not make it preferred, because a hand-written changelog entry should still 
 
 The same text becomes the tag annotation, the GitHub release body, and (when rolled) the
 changelog entry. It is written once and lands in three places.
+
+**Keep a Changelog link definitions are maintained.** `## [1.2.3]` is a markdown link
+_reference_, and renders as literal bracketed text without a matching definition at the
+foot of the file. Every bracketed heading in the document gets one — not just the version
+being released — so a changelog that never had them is repaired in one release: each
+version compares against the version below it, the oldest links to its own tag, and
+`[Unreleased]` compares the newest version against `HEAD`. Definitions for labels that are
+not headings are left alone, since those are yours.
 
 ### npm dist-tags
 
@@ -488,8 +521,55 @@ because the TOML match is anchored to the start of a line, a dependency's
 
 **Lockfiles are scoped automatically.** A `Cargo.lock` records a version for every
 dependency — hundreds of them — so matching the first `version = "…"` would rewrite an
-unrelated crate. Listing one rewrites only the `[[package]]` block whose name matches the
-crate in the sibling `Cargo.toml`; with no sibling to read, it refuses rather than guesses.
+unrelated crate. Listing one rewrites only the `[[package]]` blocks this project owns: the
+crate named in the sibling `Cargo.toml`, or — for a workspace root, which has no
+`[package]` of its own — every member that inherits the version with
+`version.workspace = true`. A member pinned to its own number is versioned separately and
+is left alone. With nothing beside it to read, it refuses rather than guesses.
+
+`package-lock.json`, `npm-shrinkwrap.json` and `uv.lock` record the project's own version
+too, and are refreshed by the tool that owns them rather than rewritten by pattern — the
+version sits in more than one place and the formats change shape between tool versions.
+Each is scoped to its manifest, so a `uv.lock` for a component this release is not
+versioning stays out of the release commit, and a missing tool warns rather than aborting.
+`pnpm-lock.yaml` records no root version, so it never goes stale.
+
+### Marking the line instead of writing a pattern
+
+The files that most want keeping in step — a README install line, a badge URL, a
+Dockerfile tag — are the ones where a regex is fiddliest to get right. A comment on the
+line says which of a file's numbers is the version, so nothing outside the file has to
+describe where it sits:
+
+````md
+Install with `npm i acme@1.2.3` <!-- x-release-kit-version -->
+
+```dockerfile
+FROM acme:1.2   # x-release-kit-minor
+```
+````
+
+`-major`, `-minor`, `-patch` and `-date` write a piece of the release instead of the whole
+version, and `x-release-kit-start-<scope>` … `x-release-kit-end` covers a run of lines
+rather than commenting each one. Just list the file:
+
+```json
+{ "versionFiles": ["README.md", "Dockerfile"] }
+```
+
+A file listed with no marker, no `pattern` and no recognised extension is treated as
+containing nothing but the version — right for a `VERSION` file, and refused for anything
+else rather than replacing its contents with the number.
+
+**Paths may contain `*`**, matching within one path segment, so the per-platform configs a
+desktop app carries do not have to be written out one by one:
+
+```json
+{ "versionFiles": ["src-tauri/tauri.*.conf.json"] }
+```
+
+A pattern matching no files aborts: it was written to keep files in step, and silently
+keeping none of them in step is the failure it was meant to prevent.
 
 For anything else, give a pattern with one capture group around the version. `versionFiles`
 takes the same entries, so several files stay in sync across formats:
@@ -561,6 +641,7 @@ rather than being silently ignored.
 | `publish`       | detected               | Publish command, or an array of them; `null` publishes nothing        |
 | `versioning`    | `"conventional"`       | How `auto` infers; or `always-patch` / `-minor` / `-major`            |
 | `verify`        | `null`                 | Command run during preflight; non-zero aborts before anything mutates |
+| `hooks`         | `{}`                   | Commands run between the steps — see [Hooks](#-hooks)                 |
 | `assistant`     | `null`                 | Drafting CLI: a name, `"auto"`, or `{ tool, model, effort }`          |
 | `commitMessage` | `"chore(release): %t"` | Release commit subject                                                |
 | `releaseTitle`  | `"%t"`                 | GitHub release title                                                  |
@@ -688,6 +769,40 @@ A project releasing off a non-default branch with a different tag scheme:
   "commitMessage": "release: %n %v"
 }
 ```
+
+## 🪝 Hooks
+
+`verify` covers the gate that matters most — the project's own tests, run during preflight
+before anything mutates. What it cannot express is work that has to happen _between_ the
+release's own steps.
+
+```json
+{
+  "hooks": {
+    "afterVersion": "cargo build --release",
+    "beforePublish": "pnpm build",
+    "afterRelease": "curl -X POST -d 'shipped %t' https://hooks.example/deploy"
+  }
+}
+```
+
+| Hook            | Runs                                                    |
+| --------------- | ------------------------------------------------------- |
+| `beforeVersion` | After preflight, before any file is written             |
+| `afterVersion`  | After the version is on disk, before the release commit |
+| `beforePublish` | After the tag is pushed, before anything is published   |
+| `afterPublish`  | After a publish actually ran                            |
+| `afterRelease`  | After the GitHub release is created                     |
+
+Each takes a command line or an array of them, expanding the same `%v` `%t` `%n` `%d`
+tokens `publish` does, shell-quoted on substitution. A non-zero exit aborts the release
+where it happened. An unknown hook name aborts rather than silently never running.
+
+`afterVersion` sits where it does for a reason: **anything it changes is staged for the
+release commit**, so a file regenerated from the version rides in that commit instead of
+being left behind in the working tree. `afterPublish` runs only when a publish actually
+happened, so a re-run that skipped an already-published target does not tell something
+downstream a lie it may act on.
 
 ## 🤖 Assistant (optional)
 
@@ -847,7 +962,7 @@ including a directory that is not a repository.
 
 ## 📋 Requirements
 
-- **Node 18+ — including for Rust, Python and Go projects.** `release-kit` is a Node
+- **Node 22+ — including for Rust, Python and Go projects.** `release-kit` is a Node
   program whatever it releases; there is no standalone binary.
 - `git`
 - `gh`, authenticated — only when creating GitHub releases
@@ -863,7 +978,7 @@ with the reasoning — are in [ROADMAP.md](ROADMAP.md).
 
 ```sh
 pnpm install
-pnpm test     # 63 tests, node --test, no framework
+pnpm test     # 188 tests, node --test, no framework
 pnpm check    # format + lint + tests, the same gate CI runs
 ```
 

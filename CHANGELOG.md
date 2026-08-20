@@ -4,6 +4,93 @@ All notable changes to @entro314labs/release-kit.
 
 ## [Unreleased]
 
+### Fixed
+
+- **The last release was resolved from the nearest tag rather than the highest version
+  tag.** `git describe --tags --abbrev=0` answers a different question, and it was wrong
+  twice over. A tag that is not a release became the baseline: one rolling `latest-beta`
+  marker — the kind `tauri-release-kit` maintains for its update channels — made a release
+  abort with "no releasable commits since latest-beta", hiding every commit since the real
+  last release. And "nearest ancestor" is not "latest release": a patch tagged on top of a
+  later minor dragged the baseline backwards, so a tag-only repository read the wrong
+  current version. The last release is now the highest version tag carrying the configured
+  prefix that is reachable from `HEAD`.
+
+- **Promoting a release candidate shipped empty notes.** Releasing `2.0.0` after
+  `2.0.0-rc.1` and `-rc.2` read history from rc.2, leaving the only commit in range the
+  release chore — which is ignored — so the tag annotation and the GitHub release carried
+  no record of the features that _were_ 2.0.0. A stable release now reads from the last
+  stable tag and absorbs the candidates that led to it. Releasing a candidate is unchanged:
+  each one's notes still say what changed in that candidate.
+
+- **The branch and tag were not pushed atomically.** `--follow-tags` decides which refs are
+  sent; `--atomic` decides whether they land together. Without it a server may accept the
+  branch and reject the tag — the split the step exists to prevent. A server without the
+  capability falls back with a warning; nothing else does, since retrying a rejected
+  non-fast-forward non-atomically would push one ref and not the other.
+
+- **Changelog headings were dead link references.** `## [1.2.3]` renders as literal
+  bracketed text without a `[1.2.3]: <url>` definition, and none were ever written. Every
+  bracketed heading in the document now gets one, so a changelog that never had them is
+  repaired in one release. Labels that are not headings are left alone.
+
+- **Listing a file in `versionFiles` that was not a version file replaced its contents with
+  the version.** The whole-file mode is right for a `VERSION` file and catastrophic for a
+  README. A file that is not already just a version now aborts with what to do instead.
+
+### Added
+
+- **`release-kit next [<target>]`** prints the version that target would release and stops.
+  Only the version reaches stdout, so `VERSION=$(release-kit next auto)` gets a clean
+  answer; everything the release would narrate goes to stderr. It is a modifier on the
+  ordinary target resolution rather than a mode of its own, so `next auto` infers the bump
+  through exactly the code the release uses.
+
+- **Version markers.** A comment on the line that carries the number says which of a file's
+  numbers is the version, so a README install line, a badge URL or a Dockerfile tag can be
+  kept in step without writing a regex per file: `x-release-kit-version`, with `-major`,
+  `-minor`, `-patch` and `-date` for a piece of it, and
+  `x-release-kit-start-<scope>` … `x-release-kit-end` for a run of lines. Reading and
+  writing share one resolver, so they cannot disagree about where a file's version lives:
+  an explicit `pattern` wins, then markers, then the shape the extension implies, then the
+  whole file.
+
+- **Globs in `versionFiles`.** A path may contain `*`, matching within one path segment, so
+  the per-platform configs a desktop app carries need not be written out one by one. A
+  pattern matching nothing aborts rather than skipping quietly. The version source itself
+  is never globbed.
+
+- **Lifecycle hooks** — `beforeVersion`, `afterVersion`, `beforePublish`, `afterPublish`,
+  `afterRelease` — for work that has to happen between the release's own steps. Command
+  lines taking the same tokens `publish` does; a non-zero exit aborts the release where it
+  happened. `afterVersion` stages whatever it changed, so a file regenerated from the
+  version rides in the release commit rather than being left behind. `afterPublish` runs
+  only when a publish actually happened. An unknown hook name aborts.
+
+- **`npm-shrinkwrap.json` and `uv.lock` are refreshed** alongside `package-lock.json`, each
+  through the tool that owns it and scoped to the manifest this release wrote, so a
+  lockfile for a component the release is not versioning stays out of the release commit. A
+  missing tool warns rather than aborting.
+
+- **Cargo workspaces.** A workspace root carries no `[package]` of its own, so `Cargo.lock`
+  handling refused it. It now resolves the members that inherit the version with
+  `version.workspace = true` and rewrites a block for each, leaving members pinned to their
+  own number alone.
+
+- **A New Contributors section** in commit-derived notes, naming anyone whose first commit
+  to the repository is in this release. Derived from the git history rather than a forge
+  API, so it needs no token and works offline; a GitHub noreply address yields the account
+  handle. Skipped on a first release, where everyone would be new.
+
+- **The publish preflight points at provenance** when publishing over OIDC. The flag is not
+  added to the command — npm generates provenance for a trusted publish on its own, and
+  forcing it fails for a private package or a registry that cannot receive one.
+
+### Changed
+
+- **Node 22 is the documented floor**, matching what `engines` has always declared and what
+  CI has always tested. The README claimed Node 18, which reached end of life in April 2025.
+
 ### Added
 
 - **One repository releasing to two registries.** Some projects are one source tree with a
