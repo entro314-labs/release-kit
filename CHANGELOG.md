@@ -4,6 +4,8 @@ All notable changes to @entro314labs/release-kit.
 
 ## [Unreleased]
 
+## [2.8.0] - 2026-08-20
+
 ### Changed
 
 - **A dirty tree without an assistant is committed with a generated message instead of
