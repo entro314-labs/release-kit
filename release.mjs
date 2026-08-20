@@ -173,7 +173,11 @@ Target (optional; defaults to the version already in package.json):
 Steps, in the fixed order they run. All but "commit" run by default:
   ${STEPS.join('  ')}
 
-Subcommands (they check or copy, and never start a release):
+Subcommands (they check, print or copy, and never start a release):
+  next [<version>|<bump>]
+                       print the version that target would release, and stop.
+                       Only the version reaches stdout, so it substitutes:
+                       VERSION=$(release-kit next auto)
   lint-commits [<range>]
                        check commit subjects against Conventional Commits
                        (default range: since the last tag)
@@ -218,9 +222,20 @@ const yellow = (s) => paint('33', s)
 
 let stepNumber = 0
 const step = (title) => console.log(`\n${bold(`[${++stepNumber}] ${title}`)}`)
-const ok = (message) => console.log(`  ${green('ok')}   ${message}`)
-const warn = (message) => console.log(`  ${yellow('warn')} ${message}`)
-const note = (message) => console.log(`  ${dim(message)}`)
+/**
+ * `next` exists to be substituted into a shell command, so its stdout must carry the
+ * version and nothing else. Everything the release would narrate still gets said — on
+ * stderr, where a human reads it and `$(...)` does not.
+ */
+const PRINT_ONLY = process.argv[2] === 'next'
+const say = (line) => {
+  if (PRINT_ONLY) process.stderr.write(`${line}\n`)
+  else console.log(line)
+}
+
+const ok = (message) => say(`  ${green('ok')}   ${message}`)
+const warn = (message) => say(`  ${yellow('warn')} ${message}`)
+const note = (message) => say(`  ${dim(message)}`)
 const indent = (text) =>
   text
     .split('\n')
@@ -1660,7 +1675,9 @@ function writeVersionInto(entry, version, { dryRun = false, date } = {}) {
 // ARGUMENTS
 // ─────────────────────────────────────────────────────────────────────────────
 
-const argv = process.argv.slice(2)
+// `next` is a modifier on the ordinary target resolution, not a mode of its own: it takes
+// the same target argument and stops once the version is known.
+const argv = process.argv.slice(PRINT_ONLY ? 3 : 2)
 const BUMPS = new Set([
   'auto',
   'major',
@@ -2178,7 +2195,7 @@ const assistant = assistantName ? ASSISTANTS[assistantName] : null
 // RESOLVE THE TARGET VERSION
 // ─────────────────────────────────────────────────────────────────────────────
 
-console.log(
+say(
   bold(`${projectName} release`) +
     (dryRun ? `  ${yellow('(dry run — nothing will execute)')}` : ''),
 )
@@ -2242,6 +2259,11 @@ if (!target) {
 }
 
 const tag = `${config.tagPrefix}${version}`
+if (PRINT_ONLY) {
+  console.log(version)
+  process.exit(0)
+}
+
 const isPrerelease = parseVersion(version).pre.length > 0
 const bumping = versionTargets.length > 0 && version !== currentVersion && runs('version')
 

@@ -798,3 +798,39 @@ describe('version markers in an arbitrary file', () => {
     assert.equal(readFile(repo, 'README.md'), '# demo\n\nA library.\n')
   })
 })
+
+describe('next', () => {
+  const commit = (repo, subject) => {
+    writeFileSync(join(repo.root, `${subject.replace(/\W/g, '')}.txt`), 'x')
+    execFileSync('git', ['add', '-A'], { cwd: repo.root })
+    execFileSync('git', ['commit', '-qm', subject], { cwd: repo.root })
+  }
+
+  it('prints the version a target would release, and nothing else', () => {
+    // It exists to be substituted into a shell command, so narration goes to stderr.
+    const repo = makeRepo()
+    const { status, stdout } = release(repo, ['next', 'minor'])
+    assert.equal(status, 0, stdout)
+    assert.equal(stdout, '1.1.0\n')
+  })
+
+  it('resolves auto exactly as the release would', () => {
+    const repo = makeRepo()
+    execFileSync('git', ['tag', '-a', 'v1.0.0', '-m', 'base'], { cwd: repo.root })
+    commit(repo, 'feat: something')
+    const { status, stdout } = release(repo, ['next', 'auto'])
+    assert.equal(status, 0, stdout)
+    assert.equal(stdout, '1.1.0\n')
+  })
+
+  it('prints the current version with no target', () => {
+    assert.equal(release(makeRepo(), ['next']).stdout, '1.0.0\n')
+  })
+
+  it('touches nothing', () => {
+    const repo = makeRepo()
+    release(repo, ['next', 'major'])
+    assert.equal(JSON.parse(readFile(repo, 'package.json')).version, '1.0.0')
+    assert.deepEqual(tagsOnRemote(repo), [])
+  })
+})
