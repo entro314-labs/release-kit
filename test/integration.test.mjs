@@ -899,3 +899,46 @@ describe('lifecycle hooks', () => {
     assert.match(stdout, /unknown hooks: afterEverything/)
   })
 })
+
+describe('new contributors', () => {
+  it('names the people whose first commit is in this release', () => {
+    // git-cliff derives this from the forge API. The repository already knows: an author
+    // absent from every commit before the previous tag has not contributed before.
+    const repo = makeRepo({ config: { publish: null, steps: ['version', 'tag', 'push'] } })
+    execFileSync('git', ['tag', '-a', 'v1.0.0', '-m', 'base'], { cwd: repo.root })
+    const by = (name, email, subject) => {
+      writeFileSync(join(repo.root, `${email.split('@')[0]}.txt`), 'x')
+      execFileSync('git', ['add', '-A'], { cwd: repo.root })
+      execFileSync('git', ['commit', '-qm', subject], {
+        cwd: repo.root,
+        env: { ...process.env, GIT_AUTHOR_NAME: name, GIT_AUTHOR_EMAIL: email },
+      })
+    }
+    by('Ada', '1+ada@users.noreply.github.com', 'feat: something new')
+    by('Test', 'test@example.com', 'fix: an existing author')
+
+    const { status, stdout } = release(repo, ['minor', '--yes'])
+    assert.equal(status, 0, stdout)
+    const annotation = execFileSync('git', ['tag', '-l', 'v1.1.0', '--format=%(contents)'], {
+      cwd: repo.root,
+      encoding: 'utf8',
+    })
+    assert.match(annotation, /### New Contributors/)
+    assert.match(annotation, /- @ada made their first contribution/, 'handle from the noreply')
+    assert.ok(!annotation.includes('Test made their'), 'the existing author is not new')
+  })
+
+  it('says nothing on a first release, where everyone would be new', () => {
+    const repo = makeRepo({ config: { publish: null, steps: ['version', 'tag', 'push'] } })
+    writeFileSync(join(repo.root, 'a.txt'), 'a')
+    execFileSync('git', ['add', '-A'], { cwd: repo.root })
+    execFileSync('git', ['commit', '-qm', 'feat: first thing'], { cwd: repo.root })
+    const { status } = release(repo, ['minor', '--yes'])
+    assert.equal(status, 0)
+    const annotation = execFileSync('git', ['tag', '-l', 'v1.1.0', '--format=%(contents)'], {
+      cwd: repo.root,
+      encoding: 'utf8',
+    })
+    assert.ok(!annotation.includes('New Contributors'))
+  })
+})

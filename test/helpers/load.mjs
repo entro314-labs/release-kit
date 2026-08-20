@@ -34,7 +34,7 @@ export {
   parseVersion, compareVersions, incrementVersion, preidOf, distTagFor,
   changelogSection, rollUnreleased, insertChangelogSection, changelogOutOfOrder,
   withChangelogLinks, remoteLinks,
-  parseCommit, inferBump, changelogFromCommits, withoutRevertedCommits,
+  parseCommit, inferBump, changelogFromCommits, withoutRevertedCommits, newContributors,
   cleanDraft, cleanNotes, linkCitedCommits, CONVENTIONAL_RE, CHANGELOG_SECTIONS, HOSTS,
   lintSubjects, CHANGELOG_TYPES, KNOWN_TYPES,
   readVersionFrom, writeVersionInto, versionSource, patternFor, expandPaths, workspaceCrates,

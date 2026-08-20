@@ -503,22 +503,67 @@ function commitsSinceLastTag(options) {
   const range = lastTag ? `${lastTag}..HEAD` : 'HEAD'
   // %B is the whole message: bodies carry BREAKING CHANGE and Release-As footers. A record
   // separator keeps multi-line messages parseable when splitting the log back apart.
-  // %h first, then the message: the hash is what links each bullet back to its commit.
-  const raw = tryRead('git', ['log', `--format=%h%x1f%B%x1e`, range]) ?? ''
+  // %h first, then the author, then the message: the hash is what links each bullet back
+  // to its commit, and the author is what says who is new here.
+  const raw = tryRead('git', ['log', `--format=%h%x1f%an%x1f%ae%x1f%B%x1e`, range]) ?? ''
   const commits = raw
     .split('\u001E')
     .map((entry) => entry.trim())
     .filter(Boolean)
     .map((entry) => {
-      const [hash, message = ''] = entry.split('\u001F')
+      const [hash, author = '', email = '', message = ''] = entry.split('\u001F')
       const [subject, ...rest] = message.split('\n')
-      return { hash: hash.trim(), subject: subject.trim(), body: rest.join('\n').trim() }
+      return {
+        hash: hash.trim(),
+        author: author.trim(),
+        email: email.trim().toLowerCase(),
+        subject: subject.trim(),
+        body: rest.join('\n').trim(),
+      }
     })
     // Bookkeeping rather than change: the previous release's own commit, merges that
     // duplicate the branch they bring in, and markers meant to be autosquashed away.
     .filter(({ subject }) => subject && !ignored.some((re) => re.test(subject)))
   const kept = withoutRevertedCommits(commits)
-  return { lastTag, commits: kept, subjects: kept.map((c) => c.subject) }
+  return {
+    lastTag,
+    commits: kept,
+    subjects: kept.map((c) => c.subject),
+    contributors: newContributors(lastTag, kept),
+  }
+}
+
+/**
+ * The people whose first commit to this repository is in this release.
+ *
+ * git-cliff derives this from the forge's API, which needs a token, a network and a
+ * forge. The repository already knows: an author absent from every commit before the
+ * previous tag has not contributed before. That answer is exact, offline, and the same on
+ * GitHub, GitLab and a bare remote — and it degrades with a shallow clone exactly as the
+ * rest of the notes do, which is already warned about.
+ *
+ * The first release has no "before", so everyone would be new and the section would say
+ * nothing; it is skipped there.
+ *
+ * @returns {string[]} display names, GitHub handles where the email carries one
+ */
+function newContributors(lastTag, commits) {
+  if (!lastTag || !commits.length) return []
+  const before = new Set(
+    (tryRead('git', ['log', '--format=%ae', lastTag]) ?? '')
+      .split('\n')
+      .map((email) => email.trim().toLowerCase())
+      .filter(Boolean),
+  )
+  const seen = new Map()
+  for (const { author, email } of commits) {
+    if (!email || before.has(email) || seen.has(email)) continue
+    // A GitHub noreply address carries the account handle, which is what a reader can
+    // actually follow; anything else falls back to the name on the commit.
+    const handle = /^(?:\d+\+)?([^@]+)@users\.noreply\.github\.com$/.exec(email)?.[1]
+    seen.set(email, handle ? `@${handle}` : author)
+  }
+  return [...seen.values()].filter(Boolean)
 }
 
 /**
@@ -613,7 +658,7 @@ function inferBump(commits, currentVersion, strategy = 'conventional') {
  *
  * @returns {string | null} markdown body, or null when nothing visible changed
  */
-function changelogFromCommits(commits, links = null, hidden = []) {
+function changelogFromCommits(commits, links = null, hidden = [], contributors = []) {
   const parsed = commits.map((c) => parseCommit(c.subject, c.body, c.hash)).filter(Boolean)
   const lines = []
 
@@ -659,6 +704,14 @@ function changelogFromCommits(commits, links = null, hidden = []) {
   if (other.length) {
     lines.push('### Other Changes', '')
     for (const c of other) lines.push(bullet(c, c.subject))
+    lines.push('')
+  }
+
+  // Last, and only when there is something above it: a list of names is not release notes
+  // on its own, and a release with no described changes should still say so.
+  if (lines.length && contributors.length) {
+    lines.push('### New Contributors', '')
+    for (const name of contributors) lines.push(`- ${name} made their first contribution`)
     lines.push('')
   }
 
@@ -2673,9 +2726,20 @@ if (!runs('release')) {
 }
 
 /** Whether one publish CLI can publish at all: OIDC, a token, or a live session. */
-function checkCredentials({ cli, registry }) {
+function checkCredentials({ cli, registry, command }) {
   if (isTrustedPublishing) {
     ok(`${cli}: trusted publishing (OIDC) — no token needed`)
+    // Provenance is the other half of what OIDC makes possible: a signed attestation
+    // tying the published artefact to the workflow and commit that produced it. It is
+    // not added to the command here — npm generates it for a trusted publish on its own,
+    // and forcing the flag fails outright for a private package or a registry that
+    // cannot receive one. Saying so is what turns "available" into "used".
+    if (NPM_CLIS.has(cli) && !/--provenance\b/.test(command ?? '')) {
+      note(
+        `${cli}: OIDC also allows a signed provenance attestation — add --provenance to ` +
+          'the publish command if the registry accepts one and the package is public',
+      )
+    }
     return
   }
   if (registry.env) {
@@ -2787,7 +2851,9 @@ function draftNotesFor(v) {
   // A stable release absorbs the candidates that led to it: their commits are what it
   // ships, and reading from the last candidate leaves the notes describing the gap
   // between two candidates rather than the release.
-  const { lastTag, subjects, commits } = commitsSinceLastTag({ stable: !isPrerelease })
+  const { lastTag, subjects, commits, contributors } = commitsSinceLastTag({
+    stable: !isPrerelease,
+  })
   if (!commits.length) return null
 
   // Notes are built from Conventional Commits, so anything not written that way is simply
@@ -2802,7 +2868,12 @@ function draftNotesFor(v) {
   }
   // An explicitly named source wins over the assistant being merely available.
   if (!assistant || notesSource === 'commits')
-    return changelogFromCommits(commits, remoteLinks(config.remote), config.hiddenTypes)
+    return changelogFromCommits(
+      commits,
+      remoteLinks(config.remote),
+      config.hiddenTypes,
+      contributors,
+    )
   if (shallowHidesHistory) {
     warn(
       `shallow clone: only ${subjects.length} commit(s) are visible, so the notes will ` +
@@ -2812,7 +2883,7 @@ function draftNotesFor(v) {
   note(`drafting notes from ${subjects.length} commit(s) with ${assistantName}...`)
   return (
     draftReleaseNotes(v, commits, lastTag, remoteLinks(config.remote)) ??
-    changelogFromCommits(commits, remoteLinks(config.remote), config.hiddenTypes)
+    changelogFromCommits(commits, remoteLinks(config.remote), config.hiddenTypes, contributors)
   )
 }
 const changelogText =
