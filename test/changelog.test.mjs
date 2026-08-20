@@ -133,3 +133,59 @@ describe('changelogOutOfOrder', () => {
     assert.deepEqual(kit.changelogOutOfOrder('## [2.3.3]\n## [2.4.0]\n## [2.3.2]\n'), ['2.4.0'])
   })
 })
+
+describe('link reference definitions', () => {
+  // `## [1.2.3]` is a markdown link reference: without a definition at the foot of the
+  // file it renders as literal bracketed text. Nothing was writing them.
+  const links = {
+    base: 'https://github.com/acme/tool',
+    issue: 'https://github.com/acme/tool/issues',
+    commit: 'https://github.com/acme/tool/commit',
+    compare: (from, to) => `https://github.com/acme/tool/compare/${from}...${to}`,
+    tag: (name) => `https://github.com/acme/tool/releases/tag/${name}`,
+  }
+  const doc = '# Changelog\n\n## [Unreleased]\n\n## [1.2.0]\n\n- b\n\n## [1.1.0]\n\n- a\n'
+
+  it('compares each version with the one below it', () => {
+    const out = kit.withChangelogLinks(doc, links, 'v')
+    assert.match(
+      out,
+      /^\[1\.2\.0\]: https:\/\/github\.com\/acme\/tool\/compare\/v1\.1\.0\.\.\.v1\.2\.0$/m,
+    )
+  })
+
+  it('links the oldest version to its own tag, having nothing to compare against', () => {
+    const out = kit.withChangelogLinks(doc, links, 'v')
+    assert.match(out, /^\[1\.1\.0\]: https:\/\/github\.com\/acme\/tool\/releases\/tag\/v1\.1\.0$/m)
+  })
+
+  it('compares [Unreleased] against HEAD', () => {
+    const out = kit.withChangelogLinks(doc, links, 'v')
+    assert.match(out, /^\[Unreleased\]: \S+\/compare\/v1\.2\.0\.\.\.HEAD$/m)
+  })
+
+  it('repairs a changelog that never had definitions, not only the new section', () => {
+    const out = kit.withChangelogLinks(doc, links, 'v')
+    assert.equal(out.match(/^\[[^\]]+\]: /gm).length, 3)
+  })
+
+  it('is idempotent', () => {
+    const once = kit.withChangelogLinks(doc, links, 'v')
+    assert.equal(kit.withChangelogLinks(once, links, 'v'), once)
+  })
+
+  it("leaves the author's own link definitions alone", () => {
+    const withOwn = `${doc}\n[the docs]: https://example.test/docs\n`
+    const out = kit.withChangelogLinks(withOwn, links, 'v')
+    assert.match(out, /^\[the docs\]: https:\/\/example\.test\/docs$/m)
+  })
+
+  it('does nothing without a resolvable remote', () => {
+    assert.equal(kit.withChangelogLinks(doc, null, 'v'), doc)
+  })
+
+  it('honours a non-default tag prefix', () => {
+    const out = kit.withChangelogLinks(doc, links, 'release-')
+    assert.match(out, /compare\/release-1\.1\.0\.\.\.release-1\.2\.0/)
+  })
+})

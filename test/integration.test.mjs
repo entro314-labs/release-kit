@@ -688,3 +688,24 @@ describe('pushing the commit and the tag', () => {
     assert.deepEqual(tagsOnRemote(repo), ['v1.1.0'])
   })
 })
+
+describe('changelog link definitions', () => {
+  // The URLs themselves are unit-tested against every forge shape in changelog.test.mjs;
+  // a fixture cannot exercise them, because its remote is a local path and
+  // `git remote get-url` rewrites any forge URL back to it through insteadOf. What is
+  // worth pinning here is that the pass runs on a real release without corrupting a
+  // document it cannot derive links for.
+  it('leaves the document intact when the remote is not a forge URL', () => {
+    const repo = makeRepo({
+      changelog:
+        '# Changelog\n\n## [Unreleased]\n\n### Added\n\n- A thing.\n\n## [1.0.0]\n\n- First.\n',
+      config: { publish: null, steps: ['version', 'changelog', 'tag', 'push'] },
+    })
+    const { status, stdout } = release(repo, ['minor', '--yes'])
+    assert.equal(status, 0, stdout)
+    const changelog = readFile(repo, 'CHANGELOG.md')
+    assert.match(changelog, /## \[1\.1\.0\] - \d{4}-\d{2}-\d{2}/)
+    assert.match(changelog, /## \[1\.0\.0\]/)
+    assert.ok(!/^\[[^\]]+\]: /m.test(changelog), 'no definitions invented from a local path')
+  })
+})

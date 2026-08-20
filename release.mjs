@@ -639,11 +639,28 @@ function changelogFromCommits(commits, links = null, hidden = []) {
  * differ: Bitbucket uses /issue/ and /commits/ where GitHub uses /issues/ and /commit/.
  */
 const HOSTS = {
-  'github.com': { issue: 'issues', commit: 'commit' },
-  'gitlab.com': { issue: 'issues', commit: 'commit' },
-  'bitbucket.org': { issue: 'issue', commit: 'commits' },
+  'github.com': {
+    issue: 'issues',
+    commit: 'commit',
+    compare: 'compare/%f...%t',
+    tag: 'releases/tag/%t',
+  },
+  'gitlab.com': { issue: 'issues', commit: 'commit', compare: 'compare/%f...%t', tag: '-/tags/%t' },
+  // Bitbucket reverses the operands and separates them with two dots, and keeps tags under
+  // /commits/tag/ rather than a releases page it does not have.
+  'bitbucket.org': {
+    issue: 'issue',
+    commit: 'commits',
+    compare: 'branches/compare/%t..%f',
+    tag: 'commits/tag/%t',
+  },
 }
-const DEFAULT_HOST = { issue: 'issues', commit: 'commit' }
+const DEFAULT_HOST = {
+  issue: 'issues',
+  commit: 'commit',
+  compare: 'compare/%f...%t',
+  tag: 'releases/tag/%t',
+}
 
 /** Words that mark an issue reference as closed by the commit. */
 const CLOSES = /\b(?:close[sd]?|closing|fix(?:e[sd])?|fixing|resolve[sd]?|resolving)\s+#(\d+)/gi
@@ -664,10 +681,13 @@ function remoteLinks(remote) {
   const [, host, path] = web ?? scp ?? []
   if (!host || !path) return null
   const shape = HOSTS[host.toLowerCase()] ?? DEFAULT_HOST
+  const base = `https://${host}/${path}`
   return {
-    base: `https://${host}/${path}`,
-    issue: `https://${host}/${path}/${shape.issue}`,
-    commit: `https://${host}/${path}/${shape.commit}`,
+    base,
+    issue: `${base}/${shape.issue}`,
+    commit: `${base}/${shape.commit}`,
+    compare: (from, to) => `${base}/${shape.compare.replace('%f', from).replace('%t', to)}`,
+    tag: (name) => `${base}/${shape.tag.replace('%t', name)}`,
   }
 }
 
@@ -1160,6 +1180,65 @@ function insertChangelogSection(text, version, date, body) {
   }
   const trimmed = text.trimEnd()
   return `${trimmed}\n\n${entry}`
+}
+
+/**
+ * Write the link reference definitions a Keep a Changelog document's headings depend on.
+ *
+ * `## [1.2.3]` is a markdown link *reference*: without a matching `[1.2.3]: <url>` at the
+ * foot of the file it renders as literal bracketed text. Sections were being written in
+ * that shape and the definitions were never written at all, so every heading in every
+ * changelog this tool has ever rolled is a dead reference.
+ *
+ * Every bracketed heading in the document gets one, not only the version being released,
+ * so a changelog that never had them is repaired in one release rather than from here on.
+ * Each version links to the diff since the version below it; the oldest links to its own
+ * tag, having no predecessor to compare against. `[Unreleased]` compares the newest
+ * version against `HEAD`.
+ *
+ * Definitions for labels that are not headings are left exactly where they are — those are
+ * the author's own links, and this owns only what it can derive.
+ *
+ * @param {ReturnType<typeof remoteLinks>} links
+ * @returns {string} the document with its definitions rewritten
+ */
+function withChangelogLinks(text, links, tagPrefix = '') {
+  if (!links) return text
+  const labels = [...text.matchAll(/^## \[([^\]]+)\]/gm)].map((m) => m[1])
+  if (!labels.length) return text
+
+  const versions = labels
+    .filter((label) => parseVersion(label.replace(/^v/, '')))
+    .sort((a, b) => compareVersions(b.replace(/^v/, ''), a.replace(/^v/, '')))
+  const unreleased = labels.find((label) => /^unreleased$/i.test(label))
+
+  const tagged = (label) => `${tagPrefix}${label.replace(/^v/, '')}`
+  const definitions = []
+  if (unreleased && versions.length) {
+    definitions.push(`[${unreleased}]: ${links.compare(tagged(versions[0]), 'HEAD')}`)
+  }
+  versions.forEach((version, index) => {
+    const previous = versions[index + 1]
+    definitions.push(
+      `[${version}]: ${
+        previous ? links.compare(tagged(previous), tagged(version)) : links.tag(tagged(version))
+      }`,
+    )
+  })
+  if (!definitions.length) return text
+
+  // Drop the existing definitions for the labels being rewritten, wherever they sit, so
+  // running this twice produces the same document rather than a second copy.
+  const managed = new Set([...(unreleased ? [unreleased] : []), ...versions])
+  const body = text
+    .split('\n')
+    .filter((line) => {
+      const label = /^\[([^\]]+)\]:\s/.exec(line)?.[1]
+      return !(label && managed.has(label))
+    })
+    .join('\n')
+
+  return `${body.trimEnd()}\n\n${definitions.join('\n')}\n`
 }
 
 /**
@@ -2538,10 +2617,13 @@ if (bumping) {
   }
 }
 
+/** The version headings a changelog carries are dead link references without these. */
+const linked = (text) => withChangelogLinks(text, remoteLinks(config.remote), config.tagPrefix)
+
 if (rolledChangelog && runs('changelog')) {
   step(`Roll ${config.changelog} to ${version}`)
   if (dryRun) console.log(`  ${yellow('would write')} ${config.changelog}`)
-  else writeFileSync(config.changelog, rolledChangelog)
+  else writeFileSync(config.changelog, linked(rolledChangelog))
   staged.push(config.changelog)
 } else if (runs('changelog') && draftedNotes && config.changelog && existsSync(config.changelog)) {
   step(`Add the drafted ${version} section to ${config.changelog}`)
@@ -2549,11 +2631,13 @@ if (rolledChangelog && runs('changelog')) {
   else {
     writeFileSync(
       config.changelog,
-      insertChangelogSection(
-        readFileSync(config.changelog, 'utf8'),
-        version,
-        new Date().toISOString().slice(0, 10),
-        draftedNotes,
+      linked(
+        insertChangelogSection(
+          readFileSync(config.changelog, 'utf8'),
+          version,
+          new Date().toISOString().slice(0, 10),
+          draftedNotes,
+        ),
       ),
     )
   }

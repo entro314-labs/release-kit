@@ -169,8 +169,19 @@ describe('withoutRevertedCommits', () => {
 
 describe('HOSTS', () => {
   it('encodes the path differences between forges', () => {
-    assert.deepEqual(kit.HOSTS['bitbucket.org'], { issue: 'issue', commit: 'commits' })
-    assert.deepEqual(kit.HOSTS['github.com'], { issue: 'issues', commit: 'commit' })
+    assert.deepEqual(kit.HOSTS['bitbucket.org'], {
+      issue: 'issue',
+      commit: 'commits',
+      // Bitbucket reverses the compare operands and separates them with two dots.
+      compare: 'branches/compare/%t..%f',
+      tag: 'commits/tag/%t',
+    })
+    assert.deepEqual(kit.HOSTS['github.com'], {
+      issue: 'issues',
+      commit: 'commit',
+      compare: 'compare/%f...%t',
+      tag: 'releases/tag/%t',
+    })
   })
 })
 

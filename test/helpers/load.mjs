@@ -33,6 +33,7 @@ export const kit = await import(
 export {
   parseVersion, compareVersions, incrementVersion, preidOf, distTagFor,
   changelogSection, rollUnreleased, insertChangelogSection, changelogOutOfOrder,
+  withChangelogLinks, remoteLinks,
   parseCommit, inferBump, changelogFromCommits, withoutRevertedCommits,
   cleanDraft, cleanNotes, linkCitedCommits, CONVENTIONAL_RE, CHANGELOG_SECTIONS, HOSTS,
   lintSubjects, CHANGELOG_TYPES, KNOWN_TYPES,
