@@ -1487,35 +1487,167 @@ function patternFor({ path, pattern, all = false }) {
 function readVersionFrom(entry) {
   const source = versionSource(entry)
   const text = readFileSync(source.path, 'utf8')
-  const pattern = patternFor(source)
-  if (!pattern) return text.trim() || null
-  const match = pattern.exec(text)
+  const { kind, shape } = versionMode(source, text)
+  if (kind === 'bare') return text.trim() || null
+  if (kind === 'markers') {
+    // The first line under a `version` marker is the one that carries the whole version;
+    // a `major` or `date` marker carries only a piece of it.
+    let scope = null
+    for (const line of text.split('\n')) {
+      const starting = MARKER_START.exec(line)?.[1]
+      if (starting) {
+        scope = starting
+        continue
+      }
+      if (scope && MARKER_END.test(line)) {
+        scope = null
+        continue
+      }
+      const active = MARKER_INLINE.exec(line)?.[1] ?? scope
+      if (active === 'version') {
+        const found = MARKER_VERSION.exec(line)?.[0]
+        if (found) return found
+      }
+    }
+    return null
+  }
+  const match = shape.exec(text)
   return match ? match[1] : null
+}
+
+/**
+ * Version markers: a comment naming the version, put on the line that carries it.
+ *
+ * A `pattern` can already reach any file, but writing one is a regex per file, and the
+ * files that most want keeping in step — a README install line, a badge URL, a Dockerfile
+ * tag, a Helm chart — are exactly the ones where a regex is fiddliest to get right and
+ * easiest to get subtly wrong. release-please solved this with a marker comment on the
+ * line instead, and the convention travels: the file says which of its numbers is the
+ * version, so nothing outside it has to describe where that number sits.
+ *
+ *   npm i acme@1.2.3            <!-- x-release-kit-version -->
+ *   FROM acme:1.2               # x-release-kit-minor
+ *   Released 2026-08-20         <!-- x-release-kit-date -->
+ *
+ * A block form covers a run of lines, for a fenced example that should not carry a comment
+ * on every line:
+ *
+ *   <!-- x-release-kit-start-version -->
+ *   ```sh
+ *   npm i acme@1.2.3
+ *   ```
+ *   <!-- x-release-kit-end -->
+ */
+const MARKER_INLINE = /x-release-kit-(major|minor|patch|version|date)\b/
+const MARKER_START = /x-release-kit-start-(major|minor|patch|version|date)\b/
+const MARKER_END = /x-release-kit-end\b/
+const MARKER_VERSION = /\d+\.\d+\.\d+(?:-[0-9a-z.-]+)?(?:\+[0-9a-z.-]+)?/i
+const MARKER_NUMBER = /\b\d+\b/
+const MARKER_DATE = /\d{4}-\d{2}-\d{2}/
+
+/** Whether a file opts into marker rewriting at all. */
+const hasVersionMarkers = (text) => MARKER_INLINE.test(text) || MARKER_START.test(text)
+
+/**
+ * Rewrite the marked numbers in a file.
+ *
+ * A marker whose line carries nothing to replace is left alone rather than guessed at: a
+ * heading above a block, or a comment on its own line, is a normal thing to find.
+ *
+ * @returns {string} the rewritten text
+ */
+function applyVersionMarkers(text, version, date) {
+  const { major, minor, patch } = parseVersion(version)
+  const replacements = {
+    version: [MARKER_VERSION, version],
+    major: [MARKER_NUMBER, String(major)],
+    minor: [MARKER_NUMBER, String(minor)],
+    patch: [MARKER_NUMBER, String(patch)],
+    date: [MARKER_DATE, date],
+  }
+  let scope = null
+  return text
+    .split('\n')
+    .map((line) => {
+      const inline = MARKER_INLINE.exec(line)?.[1]
+      const starting = MARKER_START.exec(line)?.[1]
+      // A start marker opens a block; its own line is not rewritten, since the marker
+      // comment is the whole content of it.
+      if (starting) {
+        scope = starting
+        return line
+      }
+      if (scope && MARKER_END.test(line)) {
+        scope = null
+        return line
+      }
+      const active = inline ?? scope
+      if (!active) return line
+      const [shape, value] = replacements[active]
+      return line.replace(shape, value)
+    })
+    .join('\n')
+}
+
+/**
+ * Where a file keeps its version, most specific first: the `pattern` the entry was
+ * configured with, the markers the file carries, the shape its extension implies, and —
+ * for a plain `VERSION` file — being nothing but the version.
+ *
+ * Reading and writing both go through this, so they can never disagree about which of a
+ * file's numbers is the version.
+ *
+ * @returns {{kind: 'pattern'|'markers'|'bare', shape: RegExp|null}}
+ */
+function versionMode(source, text) {
+  if (source.pattern) return { kind: 'pattern', shape: patternFor(source) }
+  if (hasVersionMarkers(text)) return { kind: 'markers', shape: null }
+  const inferred = patternFor(source)
+  return inferred ? { kind: 'pattern', shape: inferred } : { kind: 'bare', shape: null }
 }
 
 /**
  * Replace the version in a source file, touching nothing else: only the captured range is
  * rewritten, so formatting, key order and comments all survive.
  *
- * @param {{dryRun?: boolean}} [options] report the change without making it
+ * Four ways a file says where its version is, most specific first: the `pattern` it was
+ * configured with, the markers it carries, the shape its extension implies, and — for a
+ * plain `VERSION` file — being nothing but the version.
+ *
+ * @param {{dryRun?: boolean, date?: string}} [options] report the change without making
+ *   it; the date written for a `x-release-kit-date` marker
  * @returns {boolean} whether the file needed changing
  */
-function writeVersionInto(entry, version, { dryRun = false } = {}) {
+function writeVersionInto(entry, version, { dryRun = false, date } = {}) {
   const source = versionSource(entry)
   const text = readFileSync(source.path, 'utf8')
-  const pattern = patternFor(source)
+  const { kind, shape } = versionMode(source, text)
 
   let updated
-  if (pattern) {
-    if (!pattern.test(text)) throw new Error(`${source.path} has no version matching ${pattern}`)
-    pattern.lastIndex = 0
+  if (kind === 'pattern') {
+    if (!shape.test(text)) throw new Error(`${source.path} has no version matching ${shape}`)
+    shape.lastIndex = 0
     // A global pattern rewrites every match rather than the first: a Cargo.lock records
     // one block per crate, and a workspace bump owns all the members inheriting from it.
-    updated = text.replace(pattern, (match, captured) => {
+    updated = text.replace(shape, (match, captured) => {
       const at = match.indexOf(captured)
       return match.slice(0, at) + version + match.slice(at + captured.length)
     })
+  } else if (kind === 'markers') {
+    updated = applyVersionMarkers(text, version, date ?? new Date().toISOString().slice(0, 10))
   } else {
+    // The last resort overwrites the file with the version, which is right for a VERSION
+    // file and catastrophic for anything else. A file that is not already just a version
+    // was listed by mistake, or wants a marker or a pattern — say so rather than shred it.
+    const existing = text.trim()
+    if (existing && !parseVersion(existing)) {
+      throw new Error(
+        `${source.path} is not a file containing only a version, and carries no ` +
+          'x-release-kit-version marker.\n  Writing the version into it would replace ' +
+          'everything else in it. Mark the line that holds the version, or give the entry ' +
+          'a "pattern".',
+      )
+    }
     updated = `${version}\n`
   }
 
@@ -2758,9 +2890,10 @@ if (dirty && runs('commit')) {
 
 if (bumping) {
   step(`Write version ${version}`)
+  const releaseDate = new Date().toISOString().slice(0, 10)
   for (const source of versionTargets) {
     if (!existsSync(source.path)) abort(`versionFiles entry ${source.path} does not exist`)
-    if (writeVersionInto(source, version, { dryRun })) {
+    if (writeVersionInto(source, version, { dryRun, date: releaseDate })) {
       staged.push(source.path)
       console.log(`  ${dryRun ? yellow('would write') : dim('wrote')} ${source.path}`)
     }

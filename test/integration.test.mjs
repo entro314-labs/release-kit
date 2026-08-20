@@ -775,3 +775,26 @@ describe('a versionFiles glob', () => {
     assert.match(stdout, /matched no files/)
   })
 })
+
+describe('version markers in an arbitrary file', () => {
+  it('bumps the marked lines of a README on a real release', () => {
+    const repo = makeRepo({
+      files: { 'README.md': '# demo\n\n`npm i demo@1.0.0` <!-- x-release-kit-version -->\n' },
+      config: { versionFiles: ['README.md'], publish: null, steps: ['version', 'tag', 'push'] },
+    })
+    const { status, stdout } = release(repo, ['minor', '--yes'])
+    assert.equal(status, 0, stdout)
+    assert.match(readFile(repo, 'README.md'), /npm i demo@1\.1\.0/)
+  })
+
+  it('refuses to shred a file listed by mistake', () => {
+    const repo = makeRepo({
+      files: { 'README.md': '# demo\n\nA library.\n' },
+      config: { versionFiles: ['README.md'], publish: null, steps: ['version'] },
+    })
+    const { status, stdout } = release(repo, ['minor', '--yes'])
+    assert.equal(status, 1)
+    assert.match(stdout, /would replace everything/)
+    assert.equal(readFile(repo, 'README.md'), '# demo\n\nA library.\n')
+  })
+})

@@ -159,3 +159,68 @@ describe('expandPaths', () => {
     assert.deepEqual(kit.expandPaths(join(root, 'nope')), [])
   })
 })
+
+describe('version markers', () => {
+  const write = (contents) => {
+    const path = join(scratch(), 'README.md')
+    writeFileSync(path, contents)
+    return path
+  }
+
+  it('rewrites the version on a marked line and nothing else', () => {
+    const path = write(
+      '# acme\n\nInstall 1.2.3 or later.\n\n```sh\nnpm i acme@1.2.3 <!-- x-release-kit-version -->\n```\n',
+    )
+    kit.writeVersionInto({ path }, '2.0.0')
+    const out = readFileSync(path, 'utf8')
+    assert.match(out, /npm i acme@2\.0\.0/)
+    assert.match(out, /Install 1\.2\.3 or later\./, 'the unmarked line is untouched')
+  })
+
+  it('rewrites a run of lines between a start and an end marker', () => {
+    const path = write(
+      '<!-- x-release-kit-start-version -->\nacme@1.2.3\nacme-cli@1.2.3\n<!-- x-release-kit-end -->\nacme@1.2.3\n',
+    )
+    kit.writeVersionInto({ path }, '2.0.0')
+    const out = readFileSync(path, 'utf8')
+    assert.match(out, /acme@2\.0\.0\nacme-cli@2\.0\.0/)
+    assert.match(out, /x-release-kit-end -->\nacme@1\.2\.3/, 'the block ended')
+  })
+
+  it('writes only the named part for a major, minor or date marker', () => {
+    const path = write(
+      'FROM acme:1 # x-release-kit-major\nFROM acme:2 # x-release-kit-minor\nReleased 2000-01-01 <!-- x-release-kit-date -->\n',
+    )
+    kit.writeVersionInto({ path }, '4.7.0', { date: '2026-08-20' })
+    const out = readFileSync(path, 'utf8')
+    assert.match(out, /FROM acme:4 #/)
+    assert.match(out, /FROM acme:7 #/)
+    assert.match(out, /Released 2026-08-20/)
+  })
+
+  it('reads the version back out, so a marked file can be the source of truth', () => {
+    const path = write('npm i acme@1.2.3 <!-- x-release-kit-version -->\n')
+    assert.equal(kit.readVersionFrom({ path }), '1.2.3')
+  })
+
+  it('loses to an explicit pattern, so config always wins over convention', () => {
+    const path = write('pinned = "9.9.9"\nnpm i acme@1.2.3 <!-- x-release-kit-version -->\n')
+    assert.equal(kit.readVersionFrom({ path, pattern: '^pinned = "(.+)"' }), '9.9.9')
+  })
+})
+
+describe('a file that is neither marked, patterned, nor just a version', () => {
+  it('refuses rather than replacing everything in it with the version', () => {
+    // Listing a README in versionFiles used to overwrite it with "1.1.0\n".
+    const path = join(scratch(), 'README.md')
+    writeFileSync(path, '# acme\n\nA library.\n')
+    assert.throws(() => kit.writeVersionInto({ path }, '1.1.0'), /would replace everything/)
+  })
+
+  it('still writes a plain VERSION file, which is what that mode is for', () => {
+    const path = join(scratch(), 'VERSION')
+    writeFileSync(path, '1.0.0\n')
+    kit.writeVersionInto({ path }, '1.1.0')
+    assert.equal(readFileSync(path, 'utf8'), '1.1.0\n')
+  })
+})
