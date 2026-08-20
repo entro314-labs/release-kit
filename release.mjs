@@ -142,7 +142,23 @@ const DEFAULTS = {
     '^(fixup|squash)!',
   ],
   verify: null,
+  hooks: {},
 }
+
+/**
+ * The points a project can hang its own commands on, in the order they run.
+ *
+ * `verify` already covers the one gate that matters most — the project's own tests, run
+ * during preflight before anything mutates. What it cannot express is work that has to
+ * happen *between* the release's own steps: regenerating a file derived from the version,
+ * building an artefact the publish command expects to find, telling something downstream
+ * that a release landed.
+ *
+ * They are command lines rather than callbacks because the config is JSON, and they take
+ * the same `%v` `%t` `%n` `%d` tokens the publish command does. A non-zero exit aborts the
+ * release exactly where it happened, which is the point of running them there.
+ */
+const HOOKS = ['beforeVersion', 'afterVersion', 'beforePublish', 'afterPublish', 'afterRelease']
 
 /**
  * Prerelease identifiers that map to their own npm dist-tag. An identifier outside this
@@ -1890,6 +1906,14 @@ const userConfig = readUserConfig()
 const config = { ...DEFAULTS, ...userConfig }
 const unknownKeys = Object.keys(config).filter((key) => !(key in DEFAULTS))
 if (unknownKeys.length) abort(`release.config.json has unknown keys: ${unknownKeys.join(', ')}`)
+// A misspelled hook name is a hook that silently never runs, which is the failure mode
+// this file refuses everywhere else it takes a name.
+const unknownHooks = Object.keys(config.hooks ?? {}).filter((key) => !HOOKS.includes(key))
+if (unknownHooks.length) {
+  abort(
+    `release.config.json has unknown hooks: ${unknownHooks.join(', ')}\n  Known: ${HOOKS.join(', ')}`,
+  )
+}
 
 /**
  * Which steps run: config provides the baseline, --only replaces it, --skip subtracts, and
@@ -2291,6 +2315,44 @@ const expand = (template) => expandWith(template, (value) => value)
  */
 const shellQuote = (value) => `'${value.replaceAll("'", `'\\''`)}'`
 const expandShell = (template) => expandWith(template, shellQuote)
+
+/**
+ * Run a lifecycle hook, if the project configured one.
+ *
+ * Anything a hook leaves modified is staged for the release commit. Preflight has already
+ * established that the tree was clean (or that the `commit` step is committing all of it),
+ * so a file that is dirty now was produced by this release and belongs in it — which is
+ * what makes `afterVersion` useful for regenerating a file derived from the version.
+ *
+ * @param {string} name one of HOOKS
+ */
+function runHook(name) {
+  const configured = config.hooks?.[name]
+  if (!configured) return
+  const commands = Array.isArray(configured) ? configured : [configured]
+  step(`Hook ${name}`)
+  for (const command of commands) mutateShell(expandShell(command))
+  if (dryRun) return
+  for (const path of dirtyPaths()) if (!staged.includes(path)) staged.push(path)
+}
+
+/**
+ * Paths git reports as changed, whatever the change is.
+ *
+ * The status column cannot be sliced at a fixed offset: the capture is trimmed, which
+ * strips the leading space off the first entry only, so ` M file` arrives as `M file`
+ * while the rest keep theirs. Split on the gap after the code instead.
+ */
+function dirtyPaths() {
+  return (
+    (tryRead('git', ['status', '--porcelain']) ?? '')
+      .split('\n')
+      .map((line) => /^\s*\S{1,2}\s+(.+)$/.exec(line)?.[1]?.trim())
+      .filter(Boolean)
+      // A rename reads as "old -> new"; the new path is the one to stage.
+      .map((path) => path.split(' -> ').at(-1))
+  )
+}
 
 /**
  * Registries whose preflight can be run, keyed by the first word of the publish command.
@@ -2910,6 +2972,8 @@ if (dirty && runs('commit')) {
   }
 }
 
+runHook('beforeVersion')
+
 if (bumping) {
   step(`Write version ${version}`)
   const releaseDate = new Date().toISOString().slice(0, 10)
@@ -2922,6 +2986,10 @@ if (bumping) {
   }
   refreshLockfiles(versionTargets.map((source) => source.path))
 }
+
+// After the version is on disk and before the release commit, so a file the hook
+// regenerates from the version rides in that commit rather than being left behind.
+runHook('afterVersion')
 
 /** The version headings a changelog carries are dead link references without these. */
 const linked = (text) => withChangelogLinks(text, remoteLinks(config.remote), config.tagPrefix)
@@ -2991,13 +3059,22 @@ if (runs('push')) {
   pushBranchAndTag(branch ?? 'HEAD')
 }
 
+// After the tag is pushed and before anything is published: the point where an artefact
+// the publish command expects to find has to exist.
+if (publishTargets.length) runHook('beforePublish')
+
+let publishedSomething = false
 for (const target of publishTargets) {
   if (alreadyPublished.has(target.command)) continue
   step(
     `Publish ${target.name} (${target.cli}${NPM_CLIS.has(target.cli) ? `, dist-tag ${distTag}` : ''})`,
   )
   mutateShell(target.command)
+  publishedSomething = true
 }
+// Only when something was actually published: a re-run that skipped every already-published
+// target published nothing, and telling downstream otherwise is a lie it may act on.
+if (publishedSomething) runHook('afterPublish')
 
 if (runs('release') && !releaseExists) {
   step(`GitHub release ${tag}`)
@@ -3013,6 +3090,7 @@ if (runs('release') && !releaseExists) {
     ...config.assets,
   ]
   mutate('gh', args, notes ? { input: `${notes}\n` } : {})
+  runHook('afterRelease')
 }
 
 /**

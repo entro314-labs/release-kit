@@ -834,3 +834,68 @@ describe('next', () => {
     assert.deepEqual(tagsOnRemote(repo), [])
   })
 })
+
+describe('lifecycle hooks', () => {
+  it('runs each hook at its point in the release', () => {
+    const repo = makeRepo({
+      config: {
+        publish: 'npm publish --tag %d',
+        steps: ['version', 'tag', 'push', 'publish'],
+        hooks: {
+          beforeVersion: 'echo before-version >> hooks.log',
+          afterVersion: 'echo after-version >> hooks.log',
+          beforePublish: 'echo before-publish >> hooks.log',
+          afterPublish: 'echo after-publish %v >> hooks.log',
+        },
+      },
+    })
+    const { status, stdout } = release(repo, ['minor', '--yes'])
+    assert.equal(status, 0, stdout)
+    assert.deepEqual(readFile(repo, 'hooks.log').trim().split('\n'), [
+      'before-version',
+      'after-version',
+      'before-publish',
+      // The token is shell-quoted on substitution, so the shell hands the hook one
+      // literal argument — a version carrying metacharacters cannot become syntax.
+      'after-publish 1.1.0',
+    ])
+  })
+
+  it('stages what afterVersion regenerated, so it rides in the release commit', () => {
+    // The reason the hook is placed there: a file derived from the version is useless if
+    // it is left behind in the working tree.
+    const repo = makeRepo({
+      files: { 'generated.txt': 'stale\n' },
+      config: {
+        publish: null,
+        steps: ['version', 'tag', 'push'],
+        hooks: { afterVersion: 'echo %v > generated.txt' },
+      },
+    })
+    const { status, stdout } = release(repo, ['minor', '--yes'])
+    assert.equal(status, 0, stdout)
+    assert.match(readFile(repo, 'generated.txt'), /1\.1\.0/)
+    const dirty = execFileSync('git', ['status', '--porcelain'], {
+      cwd: repo.root,
+      encoding: 'utf8',
+    })
+    assert.equal(dirty.trim(), '', 'the regenerated file was committed, not left behind')
+  })
+
+  it('aborts the release where a hook failed', () => {
+    const repo = makeRepo({
+      config: { publish: null, steps: ['version', 'tag'], hooks: { beforeVersion: 'exit 3' } },
+    })
+    const { status, stdout } = release(repo, ['minor', '--yes'])
+    assert.equal(status, 1)
+    assert.equal(JSON.parse(readFile(repo, 'package.json')).version, '1.0.0', 'nothing written')
+    assert.match(stdout, /exit 3/)
+  })
+
+  it('refuses a hook name it does not know', () => {
+    const repo = makeRepo({ config: { hooks: { afterEverything: 'true' } } })
+    const { status, stdout } = release(repo, ['minor', '--yes'])
+    assert.equal(status, 1)
+    assert.match(stdout, /unknown hooks: afterEverything/)
+  })
+})
