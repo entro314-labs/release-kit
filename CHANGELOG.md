@@ -4,6 +4,8 @@ All notable changes to @entro314labs/release-kit.
 
 ## [Unreleased]
 
+## [2.9.0] - 2026-08-21
+
 ### Fixed
 
 - **The last release was resolved from the nearest tag rather than the highest version
