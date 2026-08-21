@@ -19,6 +19,15 @@ limit during development. Treat it as untested until someone runs a release with
 
 ## Resolved
 
+- **A failed publish erased its own commits from every release that followed.** Observed in
+  anger: `npm publish` failed a prepublish gate after `v2.0.1` had been tagged and pushed,
+  so the tag said the release happened and no registry had it. `auto` then refused to finish
+  it ("no releasable commits since v2.0.1"), and the release that eventually did ship read
+  its history from that tag — describing one commit, while the ten that made up `2.0.1` were
+  named in nothing installable. History is now read from the last tag whose version actually
+  reached the registry, and an unfinished release is either finished or absorbed. See
+  CHANGELOG.md.
+
 - **Four defects found by reading changie, commitizen, git-cliff,
   github-changelog-generator, release-please, `@jscutlery/semver` and Ship.js against this
   file.** Each was reproduced against a real repository before being fixed, and each has a

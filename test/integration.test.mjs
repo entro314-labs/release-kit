@@ -677,6 +677,126 @@ describe('which tag a release reads history from', () => {
   })
 })
 
+describe('a release that was tagged but never published', () => {
+  // The whole scenario, as it happened: `npm publish` failed on a prepublish gate after the
+  // tag had already been made and pushed. The tag says 2.0.1 shipped. No registry has it,
+  // and the ten commits it was made of were then invisible to every release that followed.
+  const commit = (repo, subject) => {
+    writeFileSync(join(repo.root, `${subject.replace(/\W/g, '')}.txt`), subject)
+    execFileSync('git', ['add', '-A'], { cwd: repo.root })
+    execFileSync('git', ['commit', '-qm', subject], { cwd: repo.root })
+  }
+  const tag = (repo, name) =>
+    execFileSync('git', ['tag', '-a', name, '-m', name], { cwd: repo.root })
+
+  /** A repository whose 1.1.0 release died at the publish step. */
+  const halfReleased = () => {
+    const repo = makeRepo({ changelog: CHANGELOG })
+    tag(repo, 'v1.0.0')
+    commit(repo, 'feat: the big feature')
+    const failed = release(repo, ['minor', '--yes'], { NPM_PUBLISH_FAILS: '1' })
+    assert.notEqual(failed.status, 0, 'the publish was supposed to fail')
+    assert.ok(tagsOnRemote(repo).includes('v1.1.0'), 'the tag was pushed before the publish')
+    return repo
+  }
+
+  // The registry's contents afterwards: 1.0.0 is on it, 1.1.0 never made it.
+  const REGISTRY = { NPM_PUBLISHED_VERSIONS: '1.0.0', NPM_REACHABLE: '0' }
+
+  it('finishes it on the next auto run instead of reporting nothing to release', () => {
+    // `auto` resolves the version from the commits since the last tag, found none, and
+    // aborted with "no releasable commits" — while the publish it never got to was the
+    // only thing left to do. Re-running the same command is how this is documented to
+    // recover, and `auto` was the one target that could not.
+    const repo = halfReleased()
+    const { status, stdout } = release(repo, ['auto', '--yes'], REGISTRY)
+    assert.equal(status, 0, stdout)
+    assert.match(stdout, /finishing v1\.1\.0/)
+    assert.deepEqual(tagsOnRemote(repo).sort(), ['v1.0.0', 'v1.1.0'])
+    assert.ok(
+      stubCalls(repo).some((c) => c.startsWith('npm publish')),
+      'published on the second run',
+    )
+  })
+
+  it('carries its commits into the version that does ship them', () => {
+    // The defect this file exists for: 1.2.0's notes described one commit, and the feature
+    // that was 1.1.0 is named in no release anyone can install. It also decides the bump —
+    // a feature shipping for the first time is not a patch.
+    const repo = halfReleased()
+    commit(repo, 'fix: a small thing')
+
+    const { status, stdout } = release(repo, ['auto', '--yes'], REGISTRY)
+    assert.equal(status, 0, stdout)
+    assert.match(stdout, /auto: minor/, 'the absorbed feature decides the bump')
+    assert.match(stdout, /v1\.1\.0 was tagged but never published/)
+    const annotation = execFileSync('git', ['tag', '-l', 'v1.2.0', '--format=%(contents)'], {
+      cwd: repo.root,
+      encoding: 'utf8',
+    })
+    assert.match(annotation, /the big feature/, "the unpublished release's work is in the notes")
+    assert.match(annotation, /a small thing/)
+  })
+
+  it('says which changelog section now documents a version no registry carries', () => {
+    const repo = halfReleased()
+    commit(repo, 'fix: a small thing')
+    const { stdout } = release(repo, ['auto', '--yes'], REGISTRY)
+    assert.match(stdout, /CHANGELOG\.md still documents 1\.1\.0/)
+  })
+
+  it('reads history exactly as before when the registry cannot answer', () => {
+    // `npm view` exits non-zero both for a version that is not there and for a registry
+    // that will not talk — offline, behind a proxy, session expired. Treating silence as
+    // "never published" would drag the baseline back through the whole history, so a
+    // registry that does not answer changes nothing at all.
+    const repo = halfReleased()
+    commit(repo, 'fix: a small thing')
+
+    const { status, stdout } = release(repo, ['auto', '--yes'], { NPM_REACHABLE: '1' })
+    assert.equal(status, 0, stdout)
+    assert.match(stdout, /auto: patch/)
+    assert.ok(!stdout.includes('never published'), 'nothing was concluded from the silence')
+    assert.ok(tagsOnRemote(repo).includes('v1.1.1'), 'released 1.1.1')
+  })
+
+  it('walks back over a run of them, not just the last one', () => {
+    // What actually happened: four consecutive versions were tagged and none of them
+    // published, so npm went 2.0.0 → 2.0.5 and the releases page had one entry describing
+    // one commit. The baseline has to walk back to the last version that shipped, however
+    // many failed above it.
+    const repo = halfReleased()
+    commit(repo, 'fix: the second thing')
+    const second = release(repo, ['auto', '--yes'], { ...REGISTRY, NPM_PUBLISH_FAILS: '1' })
+    assert.notEqual(second.status, 0, 'the second publish was supposed to fail too')
+    assert.ok(tagsOnRemote(repo).includes('v1.2.0'), 'and it tagged before failing')
+    commit(repo, 'fix: the third thing')
+
+    const { status, stdout } = release(repo, ['auto', '--yes'], REGISTRY)
+    assert.equal(status, 0, stdout)
+    assert.match(stdout, /v1\.2\.0, v1\.1\.0 were tagged but never published/)
+    const annotation = execFileSync('git', ['tag', '-l', 'v1.3.0', '--format=%(contents)'], {
+      cwd: repo.root,
+      encoding: 'utf8',
+    })
+    for (const subject of ['the big feature', 'the second thing', 'the third thing']) {
+      assert.match(annotation, new RegExp(subject), `${subject} is in the notes`)
+    }
+  })
+
+  it('refuses to finish it with a working tree that would move HEAD past the tag', () => {
+    // Publishing sends what is on disk, not what the tag describes. Committing the tree
+    // first and publishing anyway would ship 1.1.0 as something the v1.1.0 tag does not
+    // contain — silent, and permanent once it is on the registry.
+    const repo = halfReleased()
+    writeFileSync(join(repo.root, 'stray.txt'), 'work in progress')
+
+    const { status, stdout } = release(repo, ['--yes'], REGISTRY)
+    assert.notEqual(status, 0)
+    assert.match(stdout, /would still commit the working tree/)
+  })
+})
+
 describe('pushing the commit and the tag', () => {
   it('sends them as one transaction', () => {
     // --follow-tags decides which refs go; --atomic decides whether they go together.

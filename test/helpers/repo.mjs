@@ -88,13 +88,31 @@ esac
 exit 0
 `,
   )
+  // `npm view name@version` and `npm view name` are different questions: the first asks
+  // whether that version was published, the second whether the registry answers at all.
+  // release-kit tells "never published" from "could not ask" by asking both, so the stub
+  // has to answer them separately. NPM_PUBLISHED_VERSIONS is the registry's contents, for
+  // a test that needs one version on it and another missing.
   writeFileSync(
     join(bin, 'npm'),
     `#!/bin/sh
 echo "npm $*" >> "${calls}"
 case "$1" in
   whoami) echo "test-npm-user"; exit \${NPM_AUTHED:-0} ;;
-  view) exit \${NPM_PUBLISHED:-1} ;;
+  publish) exit \${NPM_PUBLISH_FAILS:-0} ;;
+  view)
+    spec="\${2#@}"
+    case "$spec" in
+      *@*)
+        if [ -n "$NPM_PUBLISHED_VERSIONS" ]; then
+          for known in $NPM_PUBLISHED_VERSIONS; do
+            case "$spec" in *@"$known") exit 0 ;; esac
+          done
+          exit 1
+        fi
+        exit \${NPM_PUBLISHED:-1} ;;
+      *) exit \${NPM_REACHABLE:-1} ;;
+    esac ;;
 esac
 exit 0
 `,

@@ -4,6 +4,38 @@ All notable changes to @entro314labs/release-kit.
 
 ## [Unreleased]
 
+### Fixed
+
+- **A release that failed to publish took its commits out of every release that followed.**
+  The tag and the push happen before the publish, so `npm publish` failing on a prepublish
+  gate left `2.0.1` tagged, pushed and written into the changelog with no registry carrying
+  it. Everything that reads "the last release" from tags then read it from `v2.0.1`: the
+  next release described the one commit made since, and the ten commits `2.0.1` was made of
+  were named in no release anyone could install. History is now read from the last tag whose
+  version actually reached the registry, which puts those commits back in range for the
+  notes and for the bump `auto` infers from them — a feature that never shipped still makes
+  the next release a minor. Preflight names the absorbed tags and the changelog sections
+  that now document versions no registry carries.
+
+  Both registry questions — "is this version published" and "does this registry answer at
+  all" — are asked, because every one of these CLIs exits non-zero for both. A registry that
+  will not talk (offline, a proxy, an expired session, a private package with no
+  credentials) changes nothing: history is read exactly as it was before.
+
+- **`auto` could not finish a release that died at the publish step.** Re-running the same
+  command is how this tool is documented to recover, and `auto` was the one target that
+  could not: it resolves a version from the commits since the last tag, found none, and
+  aborted with "no releasable commits since v2.0.1 — nothing to release" while the publish
+  the dead run never reached was the only thing left to do. It now finishes that release —
+  same version, same tag — whenever the tag is still at `HEAD` and nothing new is waiting to
+  be committed.
+
+- **Reusing a tag while committing a dirty working tree published a tree the tag did not
+  describe.** The guard against a commit leaving the tag behind `HEAD` covered the version
+  bump and the changelog entry but not the working tree itself, which `commit` stages by
+  default — so resuming a release with anything uncommitted moved `HEAD` past the tag and
+  published from there. It is now refused with the rest.
+
 ## [2.9.0] - 2026-08-21
 
 ### Fixed

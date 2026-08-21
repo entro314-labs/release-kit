@@ -353,6 +353,8 @@ rather than stopping at the first problem.
 - `gh` is installed and authenticated
 - Commit and tag signing can actually sign, and the key is one GitHub will accept
 - The publishing CLI is authenticated, and the version is not already published
+- The previous release actually reached the registry — one that did not is either finished
+  by this run or absorbed into it _(warning)_
 - Configured release assets exist
 - The configured `verify` command passes — the project's own gate (tests, build) runs
   before anything mutates, instead of a `prepublishOnly` hook failing after the commit,
@@ -381,6 +383,31 @@ Re-run the same command. Every step is idempotent:
 
 So a run that dies at the publish step (2FA timeout, flaky network) picks up exactly where
 it stopped. There is no cleanup step, no `--resume`, and nothing to remember.
+
+`auto` is included in that. It normally resolves the version from the commits since the
+last tag, and after a failed publish there are none — the tag it would read from is the one
+the dead run made. Rather than aborting with "no releasable commits", it finishes that
+release: same version, same tag, the steps that remain.
+
+### A release that was never published
+
+A tag is not a release. The tag and the push happen before the publish, so a publish that
+fails leaves the version tagged, pushed and written into the changelog while no registry
+carries it — and everything that reads "the last release" from tags then reads it wrong.
+
+Once history has moved past that tag, finishing it is no longer possible: publishing sends
+what is on disk, and that is no longer what the tag describes. The next release absorbs it
+instead. History is read from the last tag whose version actually reached the registry, so
+the unpublished release's commits are in range for both the notes and the bump `auto`
+infers — a feature that never shipped still makes the next release a minor. Preflight says
+which tags were absorbed, and points at the changelog sections that now document versions
+no registry carries.
+
+This costs one registry lookup per release, and the registry is the only thing asked: a
+project configured with `"publish": null` has nothing that can answer, so it reads history
+from tags as it always did. When the registry does not answer at all — offline, a proxy, an
+expired session, a private package with no credentials — nothing is concluded from the
+silence, and history is again read exactly as it was before.
 
 The one case that is not recoverable by re-running is a tag that exists at a _different_
 commit than `HEAD`. That is a genuine conflict, and it aborts rather than guessing.

@@ -24,7 +24,10 @@
  *  - Every step is idempotent. A run interrupted partway through (a publish timeout, a
  *    network failure) can be re-run: an already-written version, an existing tag at HEAD,
  *    an already-published version and an existing release are each detected and skipped.
- *    There is no cleanup step and no --resume flag.
+ *    There is no cleanup step and no --resume flag. `auto` re-run that way finishes the
+ *    unpublished release rather than reporting nothing to do, and once history has moved
+ *    on past it, the version that does ship carries its commits — a tag is not a release,
+ *    and work that never reached a registry is still unreleased.
  *
  * Configuration is optional. Defaults are the conventions (package.json version,
  * CHANGELOG.md, main branch, `v` tag prefix, npm publish); a release.config.json beside
@@ -481,19 +484,59 @@ function releaseTags(prefix = config.tagPrefix ?? '') {
 /**
  * The tag a release reads its history from.
  *
- * @param {{stable?: boolean}} [options] `stable` when the version being released has no
- *   prerelease identifier, which rolls the release candidates leading to it up into it:
- *   their work is what is shipping now, and reading from the last candidate describes only
- *   the gap between the last two candidates. Promoting `2.0.0-rc.2` to `2.0.0` that way
- *   produced empty notes, because the one commit in range was the release chore.
- *   Releasing a candidate keeps the full ordering, so each candidate's notes say what
+ * @param {{stable?: boolean, shipped?: boolean}} [options] `stable` when the version being
+ *   released has no prerelease identifier, which rolls the release candidates leading to it
+ *   up into it: their work is what is shipping now, and reading from the last candidate
+ *   describes only the gap between the last two candidates. Promoting `2.0.0-rc.2` to
+ *   `2.0.0` that way produced empty notes, because the one commit in range was the release
+ *   chore. Releasing a candidate keeps the full ordering, so each candidate's notes say what
  *   changed in that candidate rather than repeating the whole cycle.
+ *
+ *   `shipped` skips tags whose version never reached the registry — see
+ *   `absorbedReleaseTags` for why, and `versionShipped` for how that is established.
  * @returns {string | null}
  */
-function lastReleaseTag({ stable = false, prefix } = {}) {
+function lastReleaseTag({ stable = false, prefix, shipped = false } = {}) {
   const tags = releaseTags(prefix)
   const eligible = stable ? tags.filter(({ version }) => !parseVersion(version).pre.length) : tags
+  if (!shipped) return eligible[0]?.name ?? null
+  for (const tag of eligible) {
+    const state = versionShipped(tag.version)
+    if (state === true) return tag.name
+    // Nothing could answer. Walking further asks the same unanswerable question about older
+    // versions, and treating silence as "never published" would reach back to the first
+    // commit in the repository — so this reads history exactly as it did before.
+    if (state === null) break
+  }
+  // Either the registry went quiet, or no tag this project ever made is on it — a project
+  // that tags and publishes by hand looks exactly like that. Neither is evidence that the
+  // last release failed, so the newest tag stays the baseline.
   return eligible[0]?.name ?? null
+}
+
+/**
+ * The tags this release is about to absorb: versions that were tagged, pushed and written
+ * into the changelog, and then never published.
+ *
+ * Their commits are still unreleased work — the tag says otherwise, and that is what made
+ * them disappear. `2.0.1` failed to publish, `2.0.2` read its history from the `v2.0.1` tag
+ * and shipped notes covering one commit, and the ten commits `2.0.1` was made of are named
+ * in no release anyone can install. Reading from the last *shipped* tag puts them back in
+ * range, both for the notes and for the bump `auto` infers from them.
+ *
+ * @returns {{name: string, version: string}[]} newest first, empty in the ordinary case
+ */
+function absorbedReleaseTags({ stable = false } = {}) {
+  const tags = releaseTags()
+  const eligible = stable ? tags.filter(({ version }) => !parseVersion(version).pre.length) : tags
+  const baseline = lastReleaseTag({ stable, shipped: true })
+  const absorbed = []
+  for (const tag of eligible) {
+    if (tag.name === baseline) break
+    if (versionShipped(tag.version) !== false) break
+    absorbed.push(tag)
+  }
+  return absorbed
 }
 
 /** Commit subjects since the last release tag, with release and merge commits filtered out. */
@@ -2280,6 +2323,147 @@ if (assistantChoice !== 'none' && assistantChoice !== null) {
 }
 const assistant = assistantName ? ASSISTANTS[assistantName] : null
 
+/**
+ * Registries whose preflight can be run, keyed by the first word of the publish command.
+ * Each declares how that CLI answers "who am I", "does this version already exist" and
+ * "is this package there at all"; any may be null when the tool has no such notion. A
+ * publish command outside this table (vsce, a shell pipeline) is run as written with no
+ * preflight — it cannot be introspected, and guessing would invent failures.
+ *
+ * `exists` is what separates "that version was never published" from "the registry did not
+ * answer". Both make the version lookup exit non-zero, and only the first one means the
+ * release is unfinished — see `versionShipped`.
+ */
+const REGISTRIES = {
+  npm: {
+    whoami: ['whoami'],
+    published: (name, v) => ['view', `${name}@${v}`, 'version'],
+    exists: (name) => ['view', name, 'version'],
+  },
+  pnpm: {
+    whoami: ['whoami'],
+    published: (name, v) => ['view', `${name}@${v}`, 'version'],
+    exists: (name) => ['view', name, 'version'],
+  },
+  bun: {
+    whoami: ['pm', 'whoami'],
+    published: (name, v) => ['pm', 'view', `${name}@${v}`, 'version'],
+    exists: (name) => ['pm', 'view', name, 'version'],
+  },
+  // uv authenticates with a token from the environment rather than a logged-in session,
+  // and skips duplicate uploads itself via --check-url, so there is no version lookup.
+  uv: { env: ['UV_PUBLISH_TOKEN', 'UV_PUBLISH_PASSWORD'], login: 'set UV_PUBLISH_TOKEN' },
+  // cargo has no "who am I": crates.io auth is a token, either in the environment or in
+  // the credentials file `cargo login` writes. `cargo info` is the version lookup, and
+  // exits non-zero for a version the index does not carry (cargo 1.82+).
+  cargo: {
+    env: ['CARGO_REGISTRY_TOKEN', 'CARGO_REGISTRIES_CRATES_IO_TOKEN'],
+    credentials: [
+      join(homedir(), '.cargo', 'credentials.toml'),
+      join(homedir(), '.cargo', 'credentials'),
+    ],
+    login: 'run `cargo login`, or set CARGO_REGISTRY_TOKEN',
+    published: (name, v) => ['info', `${name}@${v}`],
+    exists: (name) => ['info', name],
+  },
+  // For Go the tag is the release; `go list` warms the module proxy and doubles as the
+  // check for whether this version is already resolvable.
+  go: {
+    published: (name, v) => ['list', '-m', `${name}@${v}`],
+    exists: (name) => ['list', '-m', `${name}@latest`],
+  },
+}
+
+/**
+ * Which manifest records the name a registry knows this project by, when it is not the one
+ * `projectName` came from. They are not always the same string: a Tauri plugin publishes as
+ * `@tauri-apps/plugin-x` on npm and `tauri-plugin-x` on crates.io, so looking the crate up
+ * under its npm name would report every version as unpublished.
+ */
+const NAME_MANIFEST_BY_CLI = { cargo: 'Cargo.toml' }
+
+function registryName(cli) {
+  const manifest = NAME_MANIFEST_BY_CLI[cli]
+  if (!manifest) return projectName
+  const source = versionTargets.find((entry) => basename(entry.path) === manifest)
+  return (source && readNameFrom(source)) ?? projectName
+}
+
+/**
+ * `publish` is one command or several, because one source tree can own a package in more
+ * than one ecosystem. They run in the configured order.
+ */
+const publishList = config.publish == null ? [] : [config.publish].flat()
+if (publishList.some((entry) => typeof entry !== 'string')) {
+  abort('publish must be a command string, an array of command strings, or null')
+}
+
+/**
+ * One answer per version, per run: the lookups are network calls, and the same version is
+ * asked about by the baseline walk and again by preflight.
+ */
+const shippedCache = new Map()
+
+/**
+ * Whether a version actually reached every registry this project publishes to.
+ *
+ * A tag is not a release. The tag and the push happen before the publish, so a publish that
+ * fails — a failing prepublish gate, an expired npm session, a network drop — leaves the
+ * version tagged, pushed and changelogged but absent from the registry. Nothing downstream
+ * has it, and until this could be asked, nothing upstream knew.
+ *
+ * "Not there" and "could not ask" are the same exit code from every one of these CLIs, and
+ * conflating them is dangerous in one direction only: reading an unreachable registry as
+ * "nothing was ever published" would drag the notes baseline back through the whole
+ * history. The bare-name lookup separates them — a package whose own name resolves is a
+ * registry that answered.
+ *
+ * @param {string} v
+ * @returns {boolean | null} null when nothing here can answer
+ */
+function versionShipped(v) {
+  if (shippedCache.has(v)) return shippedCache.get(v)
+  let answer = null
+  for (const template of publishList) {
+    const cli = template.trim().split(/\s+/)[0]
+    const registry = REGISTRIES[cli]
+    if (!registry?.published || !registry.exists) continue
+    const name = registryName(cli)
+    if (succeeds(cli, registry.published(name, v))) {
+      answer ??= true
+      continue
+    }
+    // One registry missing the version is enough: the release did not finish everywhere,
+    // and the half that is missing is the half still owed to its consumers.
+    if (succeeds(cli, registry.exists(name))) {
+      answer = false
+      break
+    }
+    answer = null
+    break
+  }
+  shippedCache.set(v, answer)
+  return answer
+}
+
+/**
+ * The release that was started and never finished: the newest tag, sitting at HEAD, whose
+ * version never reached the registry.
+ *
+ * Re-running the same command is the documented way to recover from a release that died
+ * partway through, and `auto` was the one target that could not: it resolves a version from
+ * the commits since the last tag, finds none, and aborts with "nothing to release" — while
+ * the thing left to do is the publish the previous run never got to.
+ *
+ * @returns {{name: string, version: string} | null}
+ */
+function unfinishedRelease() {
+  const [newest] = releaseTags()
+  if (!newest || versionShipped(newest.version) !== false) return null
+  const at = tryRead('git', ['rev-list', '-n', '1', newest.name])
+  return at && at === tryRead('git', ['rev-parse', 'HEAD']) ? newest : null
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // RESOLVE THE TARGET VERSION
 // ─────────────────────────────────────────────────────────────────────────────
@@ -2291,6 +2475,9 @@ say(
 
 /** What `auto` inferred, kept so preflight can show the reasoning. */
 let autoBump = null
+
+/** The tag of a previous release this run is finishing rather than starting. */
+let resuming = null
 
 let version
 if (!target) {
@@ -2308,24 +2495,35 @@ if (!target) {
         'from.\n  Pass the first version explicitly: release-kit 0.1.0',
     )
   }
-  const { commits, lastTag } = commitsSinceLastTag()
-  if (!commits.length) {
-    abort(
-      `no releasable commits since ${lastTag ?? 'the start of the project'} — nothing to release`,
-    )
-  }
-  autoBump = inferBump(commits, currentVersion, config.versioning)
-  if (autoBump.releaseAs) {
-    if (!parseVersion(autoBump.releaseAs)) {
-      abort(`Release-As: ${autoBump.releaseAs} in a commit is not a semver version`)
-    }
-    version = autoBump.releaseAs
+  // A release that died after the tag and before the publish is finished by re-running the
+  // same command — but only while nothing new has happened. A commit or a working tree that
+  // `--commit` is about to turn into one moves HEAD past the tag, and publishing then would
+  // ship a tree the tag does not describe; that work belongs in the next version, which is
+  // what the baseline below makes sure it is released as.
+  const wouldCommitMore = !!tryRead('git', ['status', '--porcelain']) && runs('commit')
+  const pending = wouldCommitMore ? null : unfinishedRelease()
+  if (pending) {
+    ;({ name: resuming, version } = pending)
   } else {
-    version = incrementVersion(
-      currentVersion,
-      autoBump.bump,
-      requestedPreid ?? preidOf(currentVersion),
-    )
+    const { commits, lastTag } = commitsSinceLastTag({ shipped: true })
+    if (!commits.length) {
+      abort(
+        `no releasable commits since ${lastTag ?? 'the start of the project'} — nothing to release`,
+      )
+    }
+    autoBump = inferBump(commits, currentVersion, config.versioning)
+    if (autoBump.releaseAs) {
+      if (!parseVersion(autoBump.releaseAs)) {
+        abort(`Release-As: ${autoBump.releaseAs} in a commit is not a semver version`)
+      }
+      version = autoBump.releaseAs
+    } else {
+      version = incrementVersion(
+        currentVersion,
+        autoBump.bump,
+        requestedPreid ?? preidOf(currentVersion),
+      )
+    }
   }
 } else if (BUMPS.has(target)) {
   if (!currentVersion) {
@@ -2419,64 +2617,6 @@ function dirtyPaths() {
   )
 }
 
-/**
- * Registries whose preflight can be run, keyed by the first word of the publish command.
- * Each declares how that CLI answers "who am I" and "does this version already exist";
- * either may be null when the tool has no such notion. A publish command outside this
- * table (vsce, a shell pipeline) is run as written with no preflight — it cannot be
- * introspected, and guessing would invent failures.
- */
-const REGISTRIES = {
-  npm: { whoami: ['whoami'], published: (name, v) => ['view', `${name}@${v}`, 'version'] },
-  pnpm: { whoami: ['whoami'], published: (name, v) => ['view', `${name}@${v}`, 'version'] },
-  bun: {
-    whoami: ['pm', 'whoami'],
-    published: (name, v) => ['pm', 'view', `${name}@${v}`, 'version'],
-  },
-  // uv authenticates with a token from the environment rather than a logged-in session,
-  // and skips duplicate uploads itself via --check-url, so there is no version lookup.
-  uv: { env: ['UV_PUBLISH_TOKEN', 'UV_PUBLISH_PASSWORD'], login: 'set UV_PUBLISH_TOKEN' },
-  // cargo has no "who am I": crates.io auth is a token, either in the environment or in
-  // the credentials file `cargo login` writes. `cargo info` is the version lookup, and
-  // exits non-zero for a version the index does not carry (cargo 1.82+).
-  cargo: {
-    env: ['CARGO_REGISTRY_TOKEN', 'CARGO_REGISTRIES_CRATES_IO_TOKEN'],
-    credentials: [
-      join(homedir(), '.cargo', 'credentials.toml'),
-      join(homedir(), '.cargo', 'credentials'),
-    ],
-    login: 'run `cargo login`, or set CARGO_REGISTRY_TOKEN',
-    published: (name, v) => ['info', `${name}@${v}`],
-  },
-  // For Go the tag is the release; `go list` warms the module proxy and doubles as the
-  // check for whether this version is already resolvable.
-  go: { published: (name, v) => ['list', '-m', `${name}@${v}`] },
-}
-
-/**
- * Which manifest records the name a registry knows this project by, when it is not the one
- * `projectName` came from. They are not always the same string: a Tauri plugin publishes as
- * `@tauri-apps/plugin-x` on npm and `tauri-plugin-x` on crates.io, so looking the crate up
- * under its npm name would report every version as unpublished.
- */
-const NAME_MANIFEST_BY_CLI = { cargo: 'Cargo.toml' }
-
-function registryName(cli) {
-  const manifest = NAME_MANIFEST_BY_CLI[cli]
-  if (!manifest) return projectName
-  const source = versionTargets.find((entry) => basename(entry.path) === manifest)
-  return (source && readNameFrom(source)) ?? projectName
-}
-
-/**
- * `publish` is one command or several, because one source tree can own a package in more
- * than one ecosystem. They run in the configured order.
- */
-const publishList = config.publish == null ? [] : [config.publish].flat()
-if (publishList.some((entry) => typeof entry !== 'string')) {
-  abort('publish must be a command string, an array of command strings, or null')
-}
-
 /** Each publish command with the CLI it drives, that CLI's preflight row, and its name. */
 const publishTargets = runs('publish')
   ? publishList.map((template) => {
@@ -2530,6 +2670,39 @@ if (autoBump) {
   for (const subject of [...autoBump.breaking, ...autoBump.features].slice(0, 5)) {
     console.log(dim(`       ${subject}`))
   }
+}
+
+if (resuming) {
+  ok(`finishing ${resuming}: it was tagged and pushed, but never reached the registry`)
+}
+
+// A previous release that never shipped is not history — its commits are still owed to
+// whoever installs this package, and they are in this release's range because of it. Say
+// so: the changelog keeps the section that was written for that version, and a section
+// naming a version no registry carries is worth a human deciding about.
+const absorbed = absorbedReleaseTags({ stable: !isPrerelease }).filter(
+  (entry) => entry.version !== version,
+)
+if (absorbed.length) {
+  const names = absorbed.map((entry) => entry.name).join(', ')
+  const many = absorbed.length > 1
+  const existingChangelog =
+    config.changelog && existsSync(config.changelog) ? readFileSync(config.changelog, 'utf8') : null
+  const documented = absorbed
+    .filter((entry) => existingChangelog && changelogSection(existingChangelog, entry.version))
+    .map((entry) => entry.version)
+  const stale = documented.length
+    ? `\n       ${config.changelog} still documents ${documented.join(', ')} — ${
+        documented.length > 1 ? 'versions' : 'a version'
+      } no registry carries. Fold ${
+        documented.length > 1 ? 'those sections' : 'that section'
+      } into ${version} by hand.`
+    : ''
+  warn(
+    `${names} ${many ? 'were' : 'was'} tagged but never published, so ${version} ships ${
+      many ? 'their' : 'its'
+    } commits as well as its own.${stale}`,
+  )
 }
 
 // Writing the version is the first mutating step, and it used to discover a file it
@@ -2887,6 +3060,7 @@ function draftNotesFor(v) {
   // between two candidates rather than the release.
   const { lastTag, subjects, commits, contributors } = commitsSinceLastTag({
     stable: !isPrerelease,
+    shipped: true,
   })
   if (!commits.length) return null
 
@@ -2979,13 +3153,19 @@ for (const asset of config.assets) {
 
 // Reusing a tag is the resume path, and a resume writes nothing. If this run would still
 // produce a commit, that commit moves HEAD past the tag and the release ends up tagged at
-// the wrong revision — which is silent until someone checks out the tag.
-if (taggedCommit && runs('tag') && (bumping || rolledChangelog)) {
+// the wrong revision — which is silent until someone checks out the tag, and worse for the
+// working tree: `publish` sends what is on disk now, not what the tag describes.
+const wouldCommit = [
+  dirty && runs('commit') && 'the working tree',
+  bumping && 'a version bump',
+  rolledChangelog && 'a changelog entry',
+].filter(Boolean)
+if (taggedCommit && runs('tag') && wouldCommit.length) {
   fail(
     `tag ${tag} already exists at HEAD, but this run would still commit ` +
-      `${[bumping && 'a version bump', rolledChangelog && 'a changelog entry'].filter(Boolean).join(' and ')}.\n` +
-      '       That commit would leave the tag behind HEAD. Release a new version, or use ' +
-      '--only with the steps that remain.',
+      `${wouldCommit.join(' and ')}.\n` +
+      '       That commit would leave the tag behind HEAD, and publish a tree it does not ' +
+      'describe.\n       Release a new version, or use --only with the steps that remain.',
   )
 }
 
