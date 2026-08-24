@@ -265,10 +265,14 @@ release-kit minor --skip commit             # never touch uncommitted work
 Or fix it per project, and just run `release-kit minor`:
 
 ```json
-{ "steps": ["version", "changelog", "tag", "push", "release"] }
+{ "steps": ["commit", "version", "changelog", "tag", "push", "release"] }
 ```
 
-`steps` decides **what** runs. Every other key describes **how** a step behaves — `publish`
+`steps` decides **what** runs — and an explicit list is complete: a step not named does
+not run, including `commit`. A `steps` list written before `commit` became a default step
+therefore opts out of it without having chosen to; add `"commit"` to the list (as the
+examples here do), or pass `--commit` for one run. Every other key describes **how** a
+step behaves — `publish`
 is the command, `changelog` is the file. A step whose configuration is `null` runs as a
 no-op and says so, rather than silently meaning "skip".
 
@@ -626,7 +630,7 @@ in one release, across three formats, with no scripting:
     "apps/desktop/src-tauri/Cargo.lock"
   ],
   "publish": null,
-  "steps": ["version", "changelog", "tag", "push"]
+  "steps": ["commit", "version", "changelog", "tag", "push"]
 }
 ```
 
@@ -929,7 +933,7 @@ release themselves, with the artifacts attached. That is their job. release-kit'
 at the pushed tag:
 
 ```json
-{ "steps": ["version", "changelog", "tag", "push"], "notesFile": "dist-notes.md" }
+{ "steps": ["commit", "version", "changelog", "tag", "push"], "notesFile": "dist-notes.md" }
 ```
 
 Nothing after `push` — no `publish`, no `release`. The tag push is the handoff, and it is
@@ -975,7 +979,7 @@ A project can be both — a Rust crate that also ships binaries, say. Publish th
 release-kit and let the build tool handle the binaries and the release:
 
 ```json
-{ "publish": "cargo publish", "steps": ["version", "changelog", "tag", "push", "publish"] }
+{ "publish": "cargo publish", "steps": ["commit", "version", "changelog", "tag", "push", "publish"] }
 ```
 
 ## 🔄 Keeping vendored copies in sync

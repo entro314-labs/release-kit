@@ -100,12 +100,43 @@ describe('preflight', () => {
     assert.match(subjects, /^chore: update junk\.txt$/m)
   })
 
-  it('still refuses a dirty tree when the commit step is skipped', () => {
+  it('still refuses a dirty tree when the commit step is skipped, with no config hint', () => {
     const repo = makeRepo()
     writeFileSync(join(repo.root, 'junk.txt'), 'x')
     const { status, stdout } = release(repo, ['minor', '--yes', '--skip', 'commit'])
     assert.equal(status, 1)
     assert.match(stdout, /working tree is not clean/)
+    assert.doesNotMatch(stdout, /steps list in release\.config\.json/)
+  })
+
+  it('hints at --commit when a config steps list is what excludes the commit step', () => {
+    const repo = makeRepo()
+    writeFileSync(
+      join(repo.root, 'release.config.json'),
+      JSON.stringify({ steps: ['version', 'changelog', 'tag', 'push'] }),
+    )
+    execFileSync('git', ['add', '--all'], { cwd: repo.root })
+    execFileSync('git', ['commit', '-qm', 'chore: add config'], { cwd: repo.root })
+    writeFileSync(join(repo.root, 'junk.txt'), 'x')
+    const { status, stdout } = release(repo, ['minor', '--yes'])
+    assert.equal(status, 1)
+    assert.match(stdout, /working tree is not clean/)
+    assert.match(stdout, /steps list in release\.config\.json omits `commit`/)
+    assert.match(stdout, /--commit/)
+  })
+
+  it('--commit overrides a config steps list that omits the commit step', () => {
+    const repo = makeRepo()
+    writeFileSync(
+      join(repo.root, 'release.config.json'),
+      JSON.stringify({ steps: ['version', 'changelog', 'tag', 'push', 'publish', 'release'] }),
+    )
+    execFileSync('git', ['add', '--all'], { cwd: repo.root })
+    execFileSync('git', ['commit', '-qm', 'chore: add config'], { cwd: repo.root })
+    writeFileSync(join(repo.root, 'junk.txt'), 'x')
+    const { status, stdout } = release(repo, ['minor', '--yes', '--commit'])
+    assert.equal(status, 0, stdout)
+    assert.match(stdout, /will be committed first/)
   })
 
   it('runs the configured verify command and fails preflight when it fails', () => {

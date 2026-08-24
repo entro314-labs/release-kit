@@ -6,6 +6,13 @@ All notable changes to @entro314labs/release-kit.
 
 ### Changed
 
+- **A dirty-tree refusal caused by a config `steps` list names the fix.** A steps list
+  written before `commit` became a default step omits it without ever having chosen to —
+  every goreleaser-style `{"steps": ["changelog", "tag", "push"]}` config refuses dirty
+  trees it used to simply not handle. That refusal now says the steps list is why and
+  offers both remedies (add `"commit"`, or `--commit` for one run); a refusal asked for
+  with `--skip commit` or `--only` stays bare. The README's app examples now include
+  `"commit"`, and the steps section spells out that an explicit list is complete.
 - **Codex drafts no longer boot the user's full session.** `codex exec` loaded every
   configured plugin (with their MCP servers, hooks and skills), memories, apps and the
   notify program for each one-shot prose draft — thousands of tokens of context and

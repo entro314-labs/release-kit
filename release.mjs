@@ -2310,6 +2310,20 @@ if (autoCommit) steps.add('commit')
 const runs = (name) => steps.has(name)
 
 /**
+ * True when the commit step is off because a config `steps` list omits it — as opposed to
+ * being switched off for this run with --skip or --only. Configs written before `commit`
+ * became a default step omit it without ever having chosen to, so a dirty-tree refusal
+ * caused by one deserves a hint that the flag-driven refusal does not: the flag user just
+ * asked for exactly this.
+ */
+const commitExcludedByConfig =
+  !runs('commit') &&
+  !onlySteps &&
+  !(skippedSteps && parseStepList(skippedSteps).includes('commit')) &&
+  Array.isArray(config.steps) &&
+  !config.steps.includes('commit')
+
+/**
  * The drafting tool, resolved from --assistant then config. "auto" picks the first one
  * present on PATH; a named tool must be known and installed, otherwise it is an error
  * rather than a silent downgrade to no drafting.
@@ -2789,7 +2803,12 @@ else if (dirty && runs('commit')) {
     )
   }
 } else if (dirty) {
-  fail(`working tree is not clean:\n${indent(formatStatus(dirty))}`)
+  const hint = commitExcludedByConfig
+    ? '\n       The steps list in release.config.json omits `commit` (it may predate ' +
+      'commit becoming\n       a default step). Add "commit" to it, or pass --commit ' +
+      'to commit these now.'
+    : ''
+  fail(`working tree is not clean:\n${indent(formatStatus(dirty))}${hint}`)
 } else ok('working tree clean')
 
 if (assistant) {
