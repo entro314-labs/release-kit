@@ -4,6 +4,15 @@ All notable changes to @entro314labs/release-kit.
 
 ## [Unreleased]
 
+### Changed
+
+- **Codex drafts no longer boot the user's full session.** `codex exec` loaded every
+  configured plugin (with their MCP servers, hooks and skills), memories, apps and the
+  notify program for each one-shot prose draft — thousands of tokens of context and
+  seconds of startup a draft never uses. The codex assistant row now disables those
+  features for the drafting call; on a config with many plugins this cut a draft from
+  ~19.6k to ~13.2k tokens and removed the plugin MCP OAuth noise from its output.
+
 ### Fixed
 
 - **A release that failed to publish took its commits out of every release that followed.**

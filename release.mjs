@@ -357,7 +357,28 @@ const ASSISTANTS = {
   },
   codex: {
     command: 'codex',
-    args: ['exec', '--skip-git-repo-check', '--sandbox', 'read-only'],
+    // A draft needs a bare model, but `codex exec` boots the user's whole session by
+    // default — plugins (with their MCP servers, hooks and skills), memories, apps and a
+    // notify program — several thousand tokens of context and seconds of startup that a
+    // one-shot prose prompt never uses. All four features are stable flags; an unknown
+    // flag on some future codex makes the draft fail closed into the deterministic
+    // fallback, which is this tool's contract for every assistant failure.
+    args: [
+      'exec',
+      '--skip-git-repo-check',
+      '--sandbox',
+      'read-only',
+      '--disable',
+      'plugins',
+      '--disable',
+      'hooks',
+      '--disable',
+      'memories',
+      '--disable',
+      'apps',
+      '-c',
+      'notify=[]',
+    ],
     probe: ['--version'],
     model: (m) => ['-m', m],
     effort: (e) => ['-c', `model_reasoning_effort="${e}"`],
