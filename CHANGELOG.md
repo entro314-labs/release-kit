@@ -4,6 +4,12 @@ All notable changes to @entro314labs/release-kit.
 
 ## [Unreleased]
 
+## [2.9.2] - 2026-08-31
+
+### Fixed
+
+- Generated commit subjects for dependency updates no longer use a `deps:` type that commitlint rejects. ([126030f](https://github.com/entro314-labs/release-kit/commit/126030f))
+
 ## [2.9.1] - 2026-08-24
 
 ### Changed
@@ -635,7 +641,8 @@ null` now means "no publish command configured" rather than "skip publishing", a
 - **`--sync`** to vendor the script into projects that should not depend on the registry
   they are about to publish to.
 
-[Unreleased]: https://github.com/entro314-labs/release-kit/compare/v2.9.1...HEAD
+[Unreleased]: https://github.com/entro314-labs/release-kit/compare/v2.9.2...HEAD
+[2.9.2]: https://github.com/entro314-labs/release-kit/compare/v2.9.1...v2.9.2
 [2.9.1]: https://github.com/entro314-labs/release-kit/compare/v2.9.0...v2.9.1
 [2.9.0]: https://github.com/entro314-labs/release-kit/compare/v2.8.0...v2.9.0
 [2.8.0]: https://github.com/entro314-labs/release-kit/compare/v2.7.0...v2.8.0
