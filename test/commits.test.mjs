@@ -268,11 +268,36 @@ describe('lintSubjects', () => {
 })
 
 describe('the type table is the only list of types', () => {
-  it('accepts every changelog type, so nothing is filed but unwritable', () => {
-    for (const type of kit.CHANGELOG_TYPES) {
+  it('accepts every type it will write, so nothing is filed but unwritable', () => {
+    for (const type of kit.WRITE_TYPES) {
       assert.match(`${type}: x`, kit.CONVENTIONAL_RE, type)
       assert.deepEqual(kit.lintSubjects([{ subject: `${type}: x` }]), [])
     }
+  })
+
+  it('will not draft `deps:`, the one changelog type commitlint refuses', () => {
+    assert.deepEqual(
+      kit.WRITE_TYPES,
+      kit.CHANGELOG_TYPES.filter((t) => t !== 'deps'),
+    )
+    assert.ok(!kit.CONVENTIONAL_RE.test('deps: bump oxlint to 1.80.0'))
+    // Reading it stays permissive: history written before this rule must still file.
+    assert.deepEqual(kit.lintSubjects([{ subject: 'deps: bump oxlint to 1.80.0' }]), [])
+    assert.match(kit.changelogFromCommits([c('a', 'deps: bump oxlint')]), /### Dependencies/)
+  })
+
+  it('files a deps-scoped chore or build under Dependencies, and leaves fix alone', () => {
+    const notes = kit.changelogFromCommits([
+      c('a', 'chore(deps): bump oxlint to 1.80.0'),
+      c('b', 'build(deps): bump tsdown'),
+      c('d', 'fix(deps): widen the peer range'),
+      c('e', 'chore: tidy the readme'),
+    ])
+    assert.match(notes, /### Dependencies\n\n- \*\*deps:\*\* bump oxlint to 1\.80\.0/)
+    assert.match(notes, /- \*\*deps:\*\* bump tsdown/)
+    assert.match(notes, /### Bug Fixes\n\n- \*\*deps:\*\* widen the peer range/)
+    assert.match(notes, /### Miscellaneous Chores\n\n- tidy the readme/)
+    assert.doesNotMatch(notes, /### Build System/)
   })
 
   it('knows the feature alias changelogFromCommits folds into Features', () => {

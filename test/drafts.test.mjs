@@ -89,7 +89,7 @@ describe('CONVENTIONAL_RE', () => {
   })
 
   it('rejects what should never be committed as a drafted message', () => {
-    for (const bad of ['added a thing', 'Feat: x', 'feat x', 'feat:', 'wip: x', '']) {
+    for (const bad of ['added a thing', 'Feat: x', 'feat x', 'feat:', 'wip: x', 'deps: x', '']) {
       assert.ok(!kit.CONVENTIONAL_RE.test(bad), JSON.stringify(bad))
     }
   })

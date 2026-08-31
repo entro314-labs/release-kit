@@ -36,7 +36,7 @@ export {
   withChangelogLinks, remoteLinks,
   parseCommit, inferBump, changelogFromCommits, withoutRevertedCommits, newContributors,
   cleanDraft, cleanNotes, linkCitedCommits, CONVENTIONAL_RE, CHANGELOG_SECTIONS, HOSTS,
-  lintSubjects, CHANGELOG_TYPES, KNOWN_TYPES,
+  lintSubjects, CHANGELOG_TYPES, KNOWN_TYPES, WRITE_TYPES,
   readVersionFrom, writeVersionInto, versionSource, patternFor, expandPaths, workspaceCrates,
   applyVersionMarkers, hasVersionMarkers, versionMode,
   inventedVersions, normalizeRepoUrl, fallbackCommitMessage,

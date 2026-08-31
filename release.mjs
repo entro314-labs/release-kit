@@ -748,10 +748,19 @@ function changelogFromCommits(commits, links = null, hidden = [], contributors =
 
   const known = new Set(CHANGELOG_SECTIONS.map((s) => s.type))
   const hiddenTypes = new Set(hidden)
+  // A dependency bump is conventionally written `chore(deps):` or `build(deps):` — the scope
+  // carries the meaning, and it is what dependabot, renovate and this tool's own drafter
+  // emit, because `deps:` is not in @commitlint/config-conventional's type-enum. Without
+  // this those bumps sit in Miscellaneous Chores and Build System while the Dependencies
+  // section stays empty. `fix(deps):` is left where it is: a fix is still a bug fix.
+  const isDependency = (c) =>
+    c.type === 'deps' || (c.scope === 'deps' && (c.type === 'chore' || c.type === 'build'))
   for (const { type, section } of CHANGELOG_SECTIONS) {
     if (hiddenTypes.has(type)) continue
-    const inSection = parsed.filter(
-      (c) => c.type === type || (type === 'feat' && c.type === 'feature'),
+    const inSection = parsed.filter((c) =>
+      type === 'deps'
+        ? isDependency(c)
+        : !isDependency(c) && (c.type === type || (type === 'feat' && c.type === 'feature')),
     )
     if (!inSection.length) continue
     lines.push(`### ${section}`, '')
@@ -913,7 +922,24 @@ const CHANGELOG_TYPES = CHANGELOG_SECTIONS.map((s) => s.type)
 
 /** The drafter's types plus `feature`, the alias `changelogFromCommits` folds into feat. */
 const KNOWN_TYPES = new Set([...CHANGELOG_TYPES, 'feature'])
-const CONVENTIONAL_RE = new RegExp(`^(${[...KNOWN_TYPES].join('|')})(\\([^)]+\\))?!?: .+`)
+
+/**
+ * The types this tool will write into somebody else's repository.
+ *
+ * Reading history is permissive on purpose — KNOWN_TYPES files whatever people wrote — but
+ * drafting is not, because a drafted subject has to survive the repository's own commit-msg
+ * hook. The near-universal gate is @commitlint/config-conventional, whose type-enum is
+ * exactly CHANGELOG_TYPES minus `deps`, and a drafted `deps: update dev tooling` aborted a
+ * release mid-commit with "type must be one of [build, chore, ci, ...]".
+ *
+ * Dependency work is still drafted and still reaches the Dependencies section: as
+ * `chore(deps):`, the scope dependabot and renovate emit, which `changelogFromCommits`
+ * routes there. Only the spelling the enum refuses is off the table.
+ */
+const WRITE_TYPES = CHANGELOG_TYPES.filter((type) => type !== 'deps')
+
+/** The gate on a drafted subject — WRITE_TYPES, not KNOWN_TYPES. See WRITE_TYPES. */
+const CONVENTIONAL_RE = new RegExp(`^(${WRITE_TYPES.join('|')})(\\([^)]+\\))?!?: .+`)
 
 /**
  * Check commit subjects against the grammar the rest of this file reads.
@@ -971,7 +997,9 @@ function draftCommitMessage() {
     'Write a Conventional Commits message for these staged changes.',
     '',
     'Rules:',
-    `- Subject: "<type>(<optional scope>): <description>" where type is one of ${CHANGELOG_TYPES.join(', ')}.`,
+    `- Subject: "<type>(<optional scope>): <description>" where type is one of ${WRITE_TYPES.join(', ')}.`,
+    '- For a dependency update use the `deps` scope — `chore(deps): ...` — which the',
+    '  changelog files under Dependencies.',
     '- Subject in the imperative mood, no trailing period, under 72 characters.',
     '- Add a body only if the change needs explanation; separate it with a blank line.',
     '- Output the raw commit message and nothing else: no markdown fences, no preamble.',
