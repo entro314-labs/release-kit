@@ -4,6 +4,15 @@ All notable changes to @entro314labs/release-kit.
 
 ## [Unreleased]
 
+### Fixed
+
+- **A changelog headed by dates no longer crashes the release.** Placing a new section
+  compared the version against every `## ` heading, including ones that are not versions
+  at all: `## [2026-09-02]` yields `2026-09`, which is not semver, and the comparison threw
+  `Cannot read properties of null` mid-release. Such headings are now skipped, and when a
+  file has no version heading to order against the release goes to the top rather than
+  being appended below its oldest entry.
+
 ## [2.9.2] - 2026-08-31
 
 ### Fixed

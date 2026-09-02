@@ -1405,15 +1405,25 @@ const sectionOffsets = (text) => [...text.matchAll(/^## .*$/gm)].map((m) => m.in
  */
 function insertChangelogSection(text, version, date, body) {
   const entry = `## [${version}] - ${date}\n\n${body}\n`
-  for (const offset of sectionOffsets(text)) {
+  const offsets = sectionOffsets(text)
+  let comparable = false
+  for (const offset of offsets) {
     const heading = /^## \[?v?([\d.]+(?:-[\w.]+)?)\]?/m.exec(
       text.slice(offset, text.indexOf('\n', offset)),
     )
-    // An [Unreleased] heading has no version and always stays above the releases.
-    if (!heading) continue
+    // Headings that carry no version — [Unreleased], and the date headings a changelog
+    // that never adopted semver is made of — are not positions this can order against.
+    if (!heading || !parseVersion(heading[1])) continue
+    comparable = true
     if (compareVersions(version, heading[1]) > 0) {
       return `${text.slice(0, offset)}${entry}\n${text.slice(offset)}`
     }
+  }
+  // Falling out of the loop means every version section is newer, so the release belongs
+  // at the foot. With nothing to compare against it belongs at the head instead: appending
+  // to a date-headed changelog would file the release below its oldest entry.
+  if (!comparable && offsets.length) {
+    return `${text.slice(0, offsets[0])}${entry}\n${text.slice(offsets[0])}`
   }
   const trimmed = text.trimEnd()
   return `${trimmed}\n\n${entry}`

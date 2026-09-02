@@ -113,6 +113,25 @@ describe('section placement', () => {
     )
   })
 
+  it('places the first release above a changelog headed by dates, not below it', () => {
+    // Date headings parse as neither [Unreleased] nor a version: `## [2026-09-02]` yields
+    // `2026-09`, which is not semver. Comparing against it crashed the release; appending
+    // below it would have filed 0.3.0 under the oldest entry instead.
+    const dated =
+      '# Changelog\n\n## [Unreleased]\n\n- new work.\n\n## [2026-09-02]\n\n- today.\n\n## [2026-08-26 (evening)]\n\n- older.\n'
+    const out = kit.rollUnreleased(dated, '0.3.0', '2026-09-02')
+    assert.deepEqual(
+      out.split('\n').filter((l) => l.startsWith('## ')),
+      [
+        '## [Unreleased]',
+        '## [0.3.0] - 2026-09-02',
+        '## [2026-09-02]',
+        '## [2026-08-26 (evening)]',
+      ],
+    )
+    assert.equal(kit.changelogSection(out, '0.3.0'), '- new work.')
+  })
+
   it('lifts a misplaced [Unreleased] to the top instead of rolling in place', () => {
     const broken =
       '# Changelog\n\n## [2.3.3]\n\n- old.\n\n## [Unreleased]\n\n- new work.\n\n## [2.4.0]\n\n- newer.\n'
