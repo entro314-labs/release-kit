@@ -4,6 +4,8 @@ All notable changes to @entro314labs/release-kit.
 
 ## [Unreleased]
 
+## [2.9.3] - 2026-09-02
+
 ### Fixed
 
 - **A changelog headed by dates no longer crashes the release.** Placing a new section
@@ -650,7 +652,8 @@ null` now means "no publish command configured" rather than "skip publishing", a
 - **`--sync`** to vendor the script into projects that should not depend on the registry
   they are about to publish to.
 
-[Unreleased]: https://github.com/entro314-labs/release-kit/compare/v2.9.2...HEAD
+[Unreleased]: https://github.com/entro314-labs/release-kit/compare/v2.9.3...HEAD
+[2.9.3]: https://github.com/entro314-labs/release-kit/compare/v2.9.2...v2.9.3
 [2.9.2]: https://github.com/entro314-labs/release-kit/compare/v2.9.1...v2.9.2
 [2.9.1]: https://github.com/entro314-labs/release-kit/compare/v2.9.0...v2.9.1
 [2.9.0]: https://github.com/entro314-labs/release-kit/compare/v2.8.0...v2.9.0
