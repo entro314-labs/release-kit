@@ -4,6 +4,67 @@ All notable changes to @entro314labs/release-kit.
 
 ## [Unreleased]
 
+### Fixed
+
+- **A relative bump re-run after a dead run released the wrong version.** "Re-run the same
+  command" is how a failed release is documented to recover, and `patch`/`minor`/`major`
+  were the targets it was wrong for, in two shapes. A run that wrote the version and died
+  before its release commit — a lockfile refresh, an `afterVersion` hook, a commit hook —
+  left the bump on disk, so the re-run counted from it: `minor` after a dead `minor`
+  released `1.2.0`, with `1.1.0` tagged nowhere and its changelog section documenting a
+  version that never existed. And a run that died at the publish step left `v1.1.0` at
+  `HEAD`, which `auto` finishes but `minor` skipped past, tagging `1.2.0` on the same
+  commit and leaving `1.1.0` unpublished for good. Both are now preflight failures naming
+  the command that finishes the earlier release.
+
+- **A bump target with the version step off tagged a version the manifest did not carry.**
+  `release-kit minor --skip version` (or a `steps` list without `version`) tagged `v1.1.0`
+  over a `package.json` still saying `1.0.0` — and published it, since `npm publish` sends
+  the manifest — while reporting "releasing the version already in package.json (1.1.0)".
+  Preflight now refuses the mismatch; releasing the version the files already carry with
+  the version step off works as before.
+
+- **A `versionFiles` entry that could not be written was still discovered while writing
+  the others.** The 2.9.0 fix covered a file with no version to replace; a file that is not
+  a version file at all (a README listed by mistake) and a `Cargo.lock` with nothing beside
+  it to scope by both still threw from the write step, after `package.json` had already
+  been rewritten and left dirty on disk, under a raw stack trace. Both are preflight
+  failures now, before anything mutates.
+
+- **A resume asked for with `--only` was refused over a changelog roll it would not make.**
+  The roll of `[Unreleased]` is computed whenever the section is populated, because the
+  notes come from it either way; it only becomes a commit when the `changelog` step runs.
+  Counting it regardless made `--only tag,push,release` fail "would still commit a
+  changelog entry" with the tag already at `HEAD` — the exact steps the message suggests.
+
+- **cargo lost its credential check under trusted publishing.** Any GitHub Actions job with
+  `id-token: write` was read as "no token needed" for every publish CLI. That is true of
+  npm, pnpm, bun and `uv publish`, which exchange the OIDC token themselves; crates.io's
+  trusted publishing goes through an action that turns it into `CARGO_REGISTRY_TOKEN`, so
+  a job without one failed at `cargo publish` — after the tag and the push. cargo keeps its
+  token check in CI.
+
+- **`--sync` refused to copy itself from a directory with a space in its name**, saying it
+  had been piped from stdin. The script's own path was taken from a URL's percent-encoded
+  pathname, which also kept the leading slash before a Windows drive letter.
+
+- **`release-train` planned versions release-kit would not produce.** Its semver copy bumped
+  a prerelease past its own base (`2.0.0-beta.1` + `patch` → `2.0.1`, where release-kit
+  releases `2.0.0`), ranked every prerelease equal so `rc.9` outranked `rc.10` as the last
+  release tag, counted tags from other branches, and ignored a package's configured
+  `tagPrefix`. All four now match the release each package would actually run.
+
+- **The dist-tag refusal named a flag that does not exist** (`--tag`; it is `--dist-tag`),
+  and the usage text and configuration table still said `commit` was off by default.
+
+### Changed
+
+- **The goreleaser handoff reads the notes off the tag.** The README's CI example passed
+  `notesFile` to `goreleaser --release-notes` on a fresh checkout, where the file — written
+  locally after the release commit and never part of it — does not exist. The example now
+  reads the annotation from the tag and strips a signed tag's signature block; `notesFile`
+  is documented as the same handoff for a tool that runs next on the same machine.
+
 ## [2.9.3] - 2026-09-02
 
 ### Fixed

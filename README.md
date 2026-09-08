@@ -185,20 +185,22 @@ Prerelease bumps need `--preid` unless the current version already carries one t
 
 ### Flags
 
-| Flag                         | Effect                                                                     |
-| ---------------------------- | -------------------------------------------------------------------------- |
-| `--only <steps>`             | Run only these steps, comma-separated.                                     |
-| `--skip <steps>`             | Run every step except these.                                               |
-| `--commit`                   | Force the `commit` step on when a `steps` config removed it.               |
-| `--dry-run`                  | Print every step, execute nothing. Preflight still runs and still reports. |
-| `--yes`, `-y`                | Skip the confirmation prompt.                                              |
-| `--preid <id>`               | Prerelease identifier: `alpha`, `beta`, `rc`, `next`, `nightly`, `canary`. |
-| `--dist-tag <name>`          | Override the npm dist-tag. Always wins over the derived one.               |
-| `--assistant <name>`         | Drafting CLI: `auto`, `none`, `claude`, `codex`.                           |
-| `--assistant-model <name>`   | Model the assistant runs with.                                             |
-| `--assistant-effort <level>` | Reasoning effort the assistant runs with.                                  |
-| `--sync <dir>...`            | Copy this script into other projects and exit. Touches no git state.       |
-| `--help`, `-h`               | Full flag list.                                                            |
+| Flag                         | Effect                                                                        |
+| ---------------------------- | ----------------------------------------------------------------------------- |
+| `--only <steps>`             | Run only these steps, comma-separated.                                        |
+| `--skip <steps>`             | Run every step except these.                                                  |
+| `--commit`                   | Force the `commit` step on when a `steps` config removed it.                  |
+| `--dry-run`                  | Print every step, execute nothing. Preflight still runs and still reports.    |
+| `--yes`, `-y`                | Skip the confirmation prompt.                                                 |
+| `--preid <id>`               | Prerelease identifier: `alpha`, `beta`, `rc`, `next`, `nightly`, `canary`.    |
+| `--dist-tag <name>`          | Override the npm dist-tag. Always wins over the derived one.                  |
+| `--notes <source>`           | Where notes come from: `auto`, `changelog`, `assistant`, `commits`, `github`. |
+| `--notes-file <path>`        | Write the resolved notes to a file for the next tool — see `notesFile`.       |
+| `--assistant <name>`         | Drafting CLI: `auto`, `none`, `claude`, `codex`.                              |
+| `--assistant-model <name>`   | Model the assistant runs with.                                                |
+| `--assistant-effort <level>` | Reasoning effort the assistant runs with.                                     |
+| `--sync <dir>...`            | Copy this script into other projects and exit. Touches no git state.          |
+| `--help`, `-h`               | Full flag list.                                                               |
 
 ### Linting commits
 
@@ -350,6 +352,13 @@ rather than stopping at the first problem.
 
 - The target version is greater than the current one — and for `auto`, which bump the
   commits imply and why
+- The version step will write the target, when the target differs from what the files say
+  — a tag naming one version over a manifest carrying another is refused, since
+  `npm publish` sends the manifest
+- A relative bump is not counting from a version a dead run wrote and never committed
+  (the file says one thing on disk and another at `HEAD`), and not skipping past a release
+  tagged at `HEAD` that never reached the registry — both are refused with the command that
+  finishes the earlier release instead
 - Working tree is clean, or listed for commit when the `commit` step runs
 - On the configured branch, and not on a detached HEAD
 - The remote exists, is reachable, and the branch is not behind it
@@ -392,6 +401,13 @@ it stopped. There is no cleanup step, no `--resume`, and nothing to remember.
 last tag, and after a failed publish there are none — the tag it would read from is the one
 the dead run made. Rather than aborting with "no releasable commits", it finishes that
 release: same version, same tag, the steps that remain.
+
+A relative bump is the one target that cannot be re-run as-is, because it counts from the
+version the dead run already wrote: `minor` after a dead `minor` would release `1.2.0`
+from the commit `v1.1.0` already tags. Preflight refuses both shapes of that — the bump
+written but never committed, and the tag at `HEAD` that never reached the registry — and
+names the command that finishes the earlier release: `release-kit 1.1.0`, or no target, or
+`auto`.
 
 ### A release that was never published
 
@@ -666,23 +682,27 @@ execution is not wired up yet.
 `release.config.json`, beside `package.json`. Every key is optional; unknown keys abort
 rather than being silently ignored.
 
-| Key             | Default                | Meaning                                                               |
-| --------------- | ---------------------- | --------------------------------------------------------------------- |
-| `steps`         | all but `commit`       | Which steps run; the order is fixed                                   |
-| `tagPrefix`     | `"v"`                  | Prepended to the version to form the tag                              |
-| `branch`        | `"main"`               | The only branch a release may run from; `null` allows any             |
-| `remote`        | `"origin"`             | Git remote to push to                                                 |
-| `changelog`     | `"CHANGELOG.md"`       | Changelog path; `null` for a project without one                      |
-| `versionFile`   | detected               | Where the version lives; `null` versions by tag alone                 |
-| `versionFiles`  | detected               | Further files kept in sync; a path or `{ path, pattern }`             |
-| `publish`       | detected               | Publish command, or an array of them; `null` publishes nothing        |
-| `versioning`    | `"conventional"`       | How `auto` infers; or `always-patch` / `-minor` / `-major`            |
-| `verify`        | `null`                 | Command run during preflight; non-zero aborts before anything mutates |
-| `hooks`         | `{}`                   | Commands run between the steps — see [Hooks](#-hooks)                 |
-| `assistant`     | `null`                 | Drafting CLI: a name, `"auto"`, or `{ tool, model, effort }`          |
-| `commitMessage` | `"chore(release): %t"` | Release commit subject                                                |
-| `releaseTitle`  | `"%t"`                 | GitHub release title                                                  |
-| `assets`        | `[]`                   | Files attached to the GitHub release                                  |
+| Key             | Default                | Meaning                                                                 |
+| --------------- | ---------------------- | ----------------------------------------------------------------------- |
+| `steps`         | all seven              | Which steps run; the order is fixed. `commit` no-ops on a clean tree    |
+| `tagPrefix`     | `"v"`                  | Prepended to the version to form the tag                                |
+| `branch`        | `"main"`               | The only branch a release may run from; `null` allows any               |
+| `remote`        | `"origin"`             | Git remote to push to                                                   |
+| `changelog`     | `"CHANGELOG.md"`       | Changelog path; `null` for a project without one                        |
+| `versionFile`   | detected               | Where the version lives; `null` versions by tag alone                   |
+| `versionFiles`  | detected               | Further files kept in sync; a path or `{ path, pattern }`               |
+| `publish`       | detected               | Publish command, or an array of them; `null` publishes nothing          |
+| `versioning`    | `"conventional"`       | How `auto` infers; or `always-patch` / `-minor` / `-major`              |
+| `verify`        | `null`                 | Command run during preflight; non-zero aborts before anything mutates   |
+| `hooks`         | `{}`                   | Commands run between the steps — see [Hooks](#-hooks)                   |
+| `assistant`     | `null`                 | Drafting CLI: a name, `"auto"`, or `{ tool, model, effort }`            |
+| `commitMessage` | `"chore(release): %t"` | Release commit subject                                                  |
+| `releaseTitle`  | `"%t"`                 | GitHub release title                                                    |
+| `assets`        | `[]`                   | Files attached to the GitHub release                                    |
+| `notes`         | `"auto"`               | Notes source; or force `changelog` / `assistant` / `commits` / `github` |
+| `notesFile`     | `null`                 | Write the resolved notes here for the tool that runs next               |
+| `hiddenTypes`   | `[]`                   | Commit types left out of commit-derived notes                           |
+| `ignoreCommits` | release, merge, wip…   | Regexes for commits that are bookkeeping rather than change             |
 
 Command and message strings expand four tokens: `%v` version, `%t` tag, `%n` package
 name, `%d` npm dist-tag. In the `publish` command line the substituted values are
@@ -774,7 +794,10 @@ Two npm behaviours are handled automatically:
   at all.** In GitHub Actions with
   `id-token: write`, or GitLab CI/CircleCI with `NPM_ID_TOKEN`, `whoami` fails while
   `publish` succeeds. That environment is detected and the auth check is skipped, so a
-  valid CI release is not aborted over a missing token it does not need.
+  valid CI release is not aborted over a missing token it does not need. That covers the
+  CLIs that exchange the OIDC token themselves — npm, pnpm, bun and `uv publish`. cargo is
+  not one of them: crates.io's trusted publishing goes through an action that turns the
+  token into `CARGO_REGISTRY_TOKEN`, so the cargo credential check still applies in CI.
 
 ### Examples
 
@@ -933,11 +956,13 @@ release themselves, with the artifacts attached. That is their job. release-kit'
 at the pushed tag:
 
 ```json
-{ "steps": ["commit", "version", "changelog", "tag", "push"], "notesFile": "dist-notes.md" }
+{ "steps": ["commit", "version", "changelog", "tag", "push"] }
 ```
 
 Nothing after `push` — no `publish`, no `release`. The tag push is the handoff, and it is
-what triggers the build workflow:
+what triggers the build workflow. The notes travel in the annotated tag, which is the one
+thing that reaches a fresh checkout on another machine; the signature block a signed tag
+appends is stripped before the file is handed over:
 
 ```yaml
 on:
@@ -949,6 +974,10 @@ jobs:
     steps:
       - uses: actions/checkout@v5
         with: { fetch-depth: 0 }
+      - name: Read the release notes off the tag
+        run: |
+          git tag -l --format='%(contents)' "$GITHUB_REF_NAME" \
+            | sed '/^-----BEGIN [A-Z ]*SIGNATURE-----$/,$d' > dist-notes.md
       - run: goreleaser release --clean --release-notes dist-notes.md
 ```
 
@@ -968,10 +997,11 @@ generated by different code from the same commits, and they drift.
 release-kit has already created one for that tag, goreleaser fails. Exactly one of them
 should own it, and it should be the one attaching the binaries.
 
-`notesFile` exists for this handoff: goreleaser's `--release-notes` takes a file and skips
-its own changelog generation. The notes are also in the annotated tag, but reading them back
-with `git tag --format='%(contents)'` embeds the signature when tags are signed, which then
-appears in your published release notes. `notesFile` writes the text itself.
+`notesFile` is the same handoff for a build tool that runs next **on the same machine**:
+`release-kit auto && goreleaser release --release-notes dist-notes.md`. It writes the text
+itself, with no signature to strip. It is written after the release commit and is not part
+of it, so a workflow on another machine never sees it — that is what the tag read above is
+for.
 
 ### Both at once
 

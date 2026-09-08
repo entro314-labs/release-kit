@@ -47,6 +47,7 @@ import {
 import { homedir, tmpdir } from 'node:os'
 import { basename, dirname, join, relative, resolve, sep } from 'node:path'
 import { createInterface } from 'node:readline/promises'
+import { fileURLToPath } from 'node:url'
 
 // ─────────────────────────────────────────────────────────────────────────────
 // CONFIG
@@ -115,9 +116,10 @@ import { createInterface } from 'node:readline/promises'
 const STEPS = ['commit', 'version', 'changelog', 'tag', 'push', 'publish', 'release']
 
 /**
- * All seven. `commit` is a conditional default: it no-ops on a clean tree, and on a dirty
- * tree it proceeds only when a drafting assistant is configured — otherwise preflight
- * still refuses the unclean tree. Opt out with `--skip commit` or a `steps` config.
+ * All seven. `commit` no-ops on a clean tree; on a dirty tree it stages everything and
+ * commits it, with a drafted message when an assistant is configured and a generated
+ * `chore:` message naming the files otherwise. Opt out with `--skip commit` or a `steps`
+ * config, which restores the refusal on a dirty tree.
  */
 const DEFAULT_STEPS = [...STEPS]
 
@@ -189,7 +191,8 @@ Target (optional; defaults to the version already in package.json):
   prepatch preminor premajor prerelease
                        prerelease bump; needs --preid unless it can be inferred
 
-Steps, in the fixed order they run. All but "commit" run by default:
+Steps, in the fixed order they run. All seven run by default; "commit" no-ops on a
+clean tree:
   ${STEPS.join('  ')}
 
 Subcommands (they check, print or copy, and never start a release):
@@ -1352,7 +1355,7 @@ function distTagFor(version, explicitTag) {
   throw new Error(
     `prerelease identifier "${label}" maps to no known dist-tag ` +
       `(${[...KNOWN_CHANNELS].sort().join(', ')}). Publishing it as "latest" would ` +
-      `clobber the stable line — pass --tag <dist-tag> to choose one explicitly.`,
+      `clobber the stable line — pass --dist-tag <name> to choose one explicitly.`,
   )
 }
 
@@ -1672,7 +1675,18 @@ function patternFor({ path, pattern, all = false }) {
 /** @returns {string | null} the version recorded in a source file */
 function readVersionFrom(entry) {
   const source = versionSource(entry)
-  const text = readFileSync(source.path, 'utf8')
+  return versionInText(source, readFileSync(source.path, 'utf8'))
+}
+
+/**
+ * The version a source file's text carries, resolved the same way it will be written.
+ *
+ * Split from `readVersionFrom` so the text can come from somewhere other than the working
+ * tree — `git show HEAD:<path>` — and still be read by the resolver the write uses.
+ *
+ * @returns {string | null}
+ */
+function versionInText(source, text) {
   const { kind, shape } = versionMode(source, text)
   if (kind === 'bare') return text.trim() || null
   if (kind === 'markers') {
@@ -1895,7 +1909,11 @@ if (flag('--help') || flag('-h')) {
 
 // --sync copies this file into other projects and exits; it touches no git state.
 if (flag('--sync')) {
-  const self = new URL(import.meta.url).pathname
+  // A URL's pathname is percent-encoded and keeps the leading slash before a Windows
+  // drive letter, so a script installed under a directory with a space in its name — or
+  // anywhere on Windows — was reported as "piped from stdin". fileURLToPath is the
+  // inverse of what Node did to build import.meta.url.
+  const self = fileURLToPath(import.meta.url)
   // Piped from stdin (`curl … | node -`) there is no file to copy: import.meta.url points
   // at a synthetic [eval] path. Say so instead of failing on a missing file.
   if (!existsSync(self)) {
@@ -2552,6 +2570,23 @@ let autoBump = null
 /** The tag of a previous release this run is finishing rather than starting. */
 let resuming = null
 
+/**
+ * A release tagged at HEAD that never reached the registry, found while resolving a
+ * relative bump. `auto` finishes such a release; a `patch`/`minor`/`major` cannot — it
+ * would bump past it, tag a second version on the same commit, and leave the first one
+ * unpublished for good. Preflight refuses it and names the command that finishes it.
+ */
+let unfinishedAtHead = null
+
+/**
+ * A release that died after the tag and before the publish is finished by re-running the
+ * same command — but only while nothing new has happened. A commit or a working tree that
+ * `--commit` is about to turn into one moves HEAD past the tag, and publishing then would
+ * ship a tree the tag does not describe; that work belongs in the next version, which is
+ * what the shipped-tag baseline makes sure it is released as.
+ */
+const wouldCommitMore = !!tryRead('git', ['status', '--porcelain']) && runs('commit')
+
 let version
 if (!target) {
   if (!currentVersion) {
@@ -2568,12 +2603,6 @@ if (!target) {
         'from.\n  Pass the first version explicitly: release-kit 0.1.0',
     )
   }
-  // A release that died after the tag and before the publish is finished by re-running the
-  // same command — but only while nothing new has happened. A commit or a working tree that
-  // `--commit` is about to turn into one moves HEAD past the tag, and publishing then would
-  // ship a tree the tag does not describe; that work belongs in the next version, which is
-  // what the baseline below makes sure it is released as.
-  const wouldCommitMore = !!tryRead('git', ['status', '--porcelain']) && runs('commit')
   const pending = wouldCommitMore ? null : unfinishedRelease()
   if (pending) {
     ;({ name: resuming, version } = pending)
@@ -2611,6 +2640,10 @@ if (!target) {
       `a ${target} bump from a stable version needs --preid <${[...KNOWN_CHANNELS].sort().join('|')}>`,
     )
   }
+  // The same question `auto` asks, with the opposite answer: `auto` finishes the release
+  // it finds at HEAD, a named bump would skip past it. Recorded here, refused in preflight
+  // with the rest.
+  unfinishedAtHead = wouldCommitMore ? null : unfinishedRelease()
   version = incrementVersion(currentVersion, target, preid)
 } else if (parseVersion(target)) {
   version = target
@@ -2749,6 +2782,33 @@ if (resuming) {
   ok(`finishing ${resuming}: it was tagged and pushed, but never reached the registry`)
 }
 
+if (unfinishedAtHead) {
+  fail(
+    `${unfinishedAtHead.name} is tagged at HEAD but never reached the registry, and a ` +
+      `${target} bump would release ${version} from the same commit and leave it that way.\n` +
+      `       Finish it instead: re-run with no target, or with auto.`,
+  )
+}
+
+// A run that wrote the version and died before its release commit — a failing lockfile
+// refresh, an afterVersion hook, a commit hook — leaves the bump on disk and nowhere
+// else. The current version is then read from that file, and a relative bump counts from
+// it: `minor` after a dead `minor` released 1.2.0 with 1.1.0 tagged nowhere, its changelog
+// section documenting a version that never existed. Only a bump is affected; an explicit
+// version, or none, releases what is on disk and the commit step carries it.
+if (target && BUMPS.has(target) && versionFile && currentVersion) {
+  const committed = tryRead('git', ['show', `HEAD:${versionFile.path}`])
+  const headVersion = committed === null ? null : versionInText(versionFile, committed)
+  if (headVersion && headVersion !== currentVersion) {
+    fail(
+      `${versionFile.path} says ${currentVersion} on disk but ${headVersion} at HEAD — an ` +
+        `uncommitted version bump, which a ${target} bump would count from and skip past.\n` +
+        `       Finish it with \`${INVOCATION} ${currentVersion}\`, or restore the file: ` +
+        `git restore ${versionFile.path}`,
+    )
+  }
+}
+
 // A previous release that never shipped is not history — its commits are still owed to
 // whoever installs this package, and they are in this release's range because of it. Say
 // so: the changelog keeps the section that was written for that version, and a section
@@ -2756,7 +2816,9 @@ if (resuming) {
 const absorbed = absorbedReleaseTags({ stable: !isPrerelease }).filter(
   (entry) => entry.version !== version,
 )
-if (absorbed.length) {
+// Not when the run is being refused for exactly this: saying the commits ship in a
+// version that will not be released contradicts the failure above it.
+if (absorbed.length && !unfinishedAtHead) {
   const names = absorbed.map((entry) => entry.name).join(', ')
   const many = absorbed.length > 1
   const existingChangelog =
@@ -2789,12 +2851,31 @@ if (bumping) {
     }
     if (source.optional) continue
     const text = readFileSync(source.path, 'utf8')
-    const { kind, shape } = versionMode(source, text)
+    // Resolving the mode can itself refuse — a Cargo.lock with nothing beside it to say
+    // which crate is yours — and the write step must not be where that is discovered.
+    let mode
+    try {
+      mode = versionMode(source, text)
+    } catch (err) {
+      fail(err.message)
+      continue
+    }
+    const { kind, shape } = mode
     if (kind === 'pattern' && !shape.test(text)) {
       fail(
         `${source.path} has no version for release-kit to replace.\n` +
           '       Remove it from versionFiles, mark the line with x-release-kit-version, ' +
           'or give the entry a "pattern".',
+      )
+    } else if (kind === 'bare' && text.trim() && !parseVersion(text.trim())) {
+      // The whole-file mode is right for a VERSION file and catastrophic for anything
+      // else. `writeVersionInto` refuses it too, but by then the files before it in the
+      // list have already changed.
+      fail(
+        `${source.path} is not a file containing only a version, and carries no ` +
+          'x-release-kit-version marker.\n       Writing the version into it would replace ' +
+          'everything else in it. Mark the line that holds the version, or give the entry ' +
+          'a "pattern".',
       )
     }
   }
@@ -2807,6 +2888,17 @@ if (bumping && currentVersion && compareVersions(version, currentVersion) <= 0) 
 } else if (bumping) {
   // No manifest and no tag to read a version from, but files to write one into.
   ok(`writing ${version} into ${versionTargets.map((source) => source.path).join(', ')}`)
+} else if (versionTargets.length && version !== currentVersion) {
+  // The version step is off and the target is not what the files say. The tag would name
+  // one version and the manifest — which is what `npm publish` sends and what the build
+  // compiles in — another. There is no release in which those two are allowed to differ.
+  const files = versionTargets.map((source) => source.path).join(', ')
+  fail(
+    `the version step is not selected, but ${version} is not the version in ${files}` +
+      `${currentVersion ? ` (${currentVersion})` : ''}.\n` +
+      '       The tag would say one version and the files another. Add "version" to the ' +
+      'steps, or release the version already there.',
+  )
 } else if (versionFile) {
   ok(`releasing the version already in ${versionFile.path} (${version})`)
 } else {
@@ -3010,9 +3102,17 @@ if (!runs('release')) {
   if (releaseExists) note(`a GitHub release for ${tag} already exists — will skip that step`)
 }
 
+/**
+ * CLIs that publish over OIDC with no token of their own once the CI job can mint one:
+ * npm, pnpm and bun exchange it with the registry themselves, and so does `uv publish`.
+ * cargo does not — crates.io's trusted publishing goes through an action that turns the
+ * OIDC token into a `CARGO_REGISTRY_TOKEN`, so for cargo the token check still stands.
+ */
+const OIDC_CLIS = new Set([...NPM_CLIS, 'uv'])
+
 /** Whether one publish CLI can publish at all: OIDC, a token, or a live session. */
 function checkCredentials({ cli, registry, command }) {
-  if (isTrustedPublishing) {
+  if (isTrustedPublishing && OIDC_CLIS.has(cli)) {
     ok(`${cli}: trusted publishing (OIDC) — no token needed`)
     // Provenance is the other half of what OIDC makes possible: a signed attestation
     // tying the published artefact to the workflow and commit that produced it. It is
@@ -3236,7 +3336,9 @@ for (const asset of config.assets) {
 const wouldCommit = [
   dirty && runs('commit') && 'the working tree',
   bumping && 'a version bump',
-  rolledChangelog && 'a changelog entry',
+  // The roll is computed whenever [Unreleased] is populated, because the notes come from
+  // it either way; it is only written — and only becomes a commit — when the step runs.
+  rolledChangelog && runs('changelog') && 'a changelog entry',
 ].filter(Boolean)
 if (taggedCommit && runs('tag') && wouldCommit.length) {
   fail(

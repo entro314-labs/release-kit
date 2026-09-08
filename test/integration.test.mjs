@@ -6,11 +6,19 @@
  */
 import assert from 'node:assert/strict'
 import { execFileSync } from 'node:child_process'
-import { writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, it } from 'node:test'
 
-import { makeRepo, readFile, release, stubCalls, tagsOnRemote } from './helpers/repo.mjs'
+import {
+  makeRepo,
+  readFile,
+  release,
+  RELEASE_MJS,
+  stubCalls,
+  tagsOnRemote,
+} from './helpers/repo.mjs'
 
 const CHANGELOG = '# Changelog\n\n## [Unreleased]\n\n### Added\n\n- A thing.\n'
 
@@ -195,6 +203,93 @@ describe('preflight', () => {
     assert.equal(status, 1)
     assert.match(stdout, /would still commit/)
   })
+
+  it('does not count a changelog roll the changelog step will not make', () => {
+    // The roll is computed whenever [Unreleased] is populated, since the notes come from
+    // it either way; it only becomes a commit when the step runs. Counting it regardless
+    // refused a resume that was asked for with exactly the steps that remained.
+    const repo = makeRepo({ changelog: CHANGELOG })
+    execFileSync('git', ['tag', '-a', 'v1.0.0', '-m', 'existing'], { cwd: repo.root })
+    const { status, stdout } = release(repo, ['--only', 'tag,push,release', '--yes'])
+    assert.equal(status, 0, stdout)
+    assert.match(stdout, /already exists at HEAD — will reuse it/)
+    assert.deepEqual(tagsOnRemote(repo), ['v1.0.0'])
+  })
+
+  it('refuses a bump target when the version step would not write it', () => {
+    // The tag would say 1.1.0 while package.json — what `npm publish` sends — says 1.0.0.
+    // There is no release in which those two are allowed to differ.
+    const repo = makeRepo({ changelog: CHANGELOG })
+    const { status, stdout } = release(repo, ['minor', '--yes', '--skip', 'version'])
+    assert.equal(status, 1)
+    assert.match(stdout, /version step is not selected, but 1\.1\.0 is not the version/)
+    assert.equal(JSON.parse(readFile(repo, 'package.json')).version, '1.0.0')
+    assert.deepEqual(tagsOnRemote(repo), [])
+    assert.ok(!stubCalls(repo).some((c) => c.startsWith('npm publish')), 'nothing published')
+  })
+
+  it('still releases the version already in the manifest with the version step off', () => {
+    const repo = makeRepo({ changelog: CHANGELOG })
+    const { status, stdout } = release(repo, ['--only', 'tag,push', '--yes'])
+    assert.equal(status, 0, stdout)
+    assert.match(stdout, /releasing the version already in package\.json \(1\.0\.0\)/)
+    assert.deepEqual(tagsOnRemote(repo), ['v1.0.0'])
+  })
+
+  it('refuses a bump that would count from a version a dead run wrote but never committed', () => {
+    // A run that wrote the version and died before its release commit — here an
+    // afterVersion hook — leaves the bump on disk. The current version then reads from that
+    // file, and `minor` re-run "the same way" released 1.2.0, with 1.1.0 tagged nowhere and
+    // its changelog section documenting a version that never existed.
+    const repo = makeRepo({
+      changelog: CHANGELOG,
+      config: { publish: null, steps: ['version', 'changelog', 'tag', 'push'] },
+    })
+    writeFileSync(
+      join(repo.root, 'release.config.json'),
+      JSON.stringify({
+        ...JSON.parse(readFile(repo, 'release.config.json')),
+        hooks: { afterVersion: 'exit 7' },
+      }),
+    )
+    execFileSync('git', ['add', '--all'], { cwd: repo.root })
+    execFileSync('git', ['commit', '-qm', 'chore: add a failing hook'], { cwd: repo.root })
+    const dead = release(repo, ['minor', '--yes'])
+    assert.equal(dead.status, 1, 'the hook was supposed to kill the run')
+    assert.equal(
+      JSON.parse(readFile(repo, 'package.json')).version,
+      '1.1.0',
+      'written, not committed',
+    )
+
+    // The user fixes the cause (drops the hook) and re-runs the same command.
+    writeFileSync(
+      join(repo.root, 'release.config.json'),
+      JSON.stringify({ publish: null, steps: ['version', 'changelog', 'tag', 'push'] }),
+    )
+    const { status, stdout } = release(repo, ['minor', '--yes'])
+    assert.equal(status, 1)
+    assert.match(stdout, /package\.json says 1\.1\.0 on disk but 1\.0\.0 at HEAD/)
+    assert.match(stdout, /1\.1\.0`/, 'names the command that finishes it')
+    assert.deepEqual(tagsOnRemote(repo), [], 'nothing released')
+
+    // Finishing it with the version on disk is what the message asks for.
+    const finished = release(repo, ['1.1.0', '--yes', '--commit'])
+    assert.equal(finished.status, 0, finished.stdout)
+    assert.deepEqual(tagsOnRemote(repo), ['v1.1.0'])
+  })
+
+  it('lets a bump proceed over an unrelated uncommitted manifest edit', () => {
+    // Only the version field matters: a script added to package.json is ordinary dirty
+    // work for the commit step, not a half-finished release.
+    const repo = makeRepo({ changelog: CHANGELOG })
+    const manifest = JSON.parse(readFile(repo, 'package.json'))
+    manifest.scripts = { test: 'node --test' }
+    writeFileSync(join(repo.root, 'package.json'), `${JSON.stringify(manifest, null, 2)}\n`)
+    const { status, stdout } = release(repo, ['minor', '--yes'])
+    assert.equal(status, 0, stdout)
+    assert.deepEqual(tagsOnRemote(repo), ['v1.1.0'])
+  })
 })
 
 describe('steps', () => {
@@ -327,6 +422,25 @@ describe('one repository, two ecosystems', () => {
     })
     assert.equal(status, 1)
     assert.match(stdout, /cargo has no publish credentials/)
+  })
+
+  it('still requires a cargo token under trusted publishing, which only npm carries', () => {
+    // A CI job with id-token: write mints an OIDC token that npm exchanges itself. cargo
+    // does not: crates.io's trusted publishing goes through an action that turns it into
+    // CARGO_REGISTRY_TOKEN, so without one `cargo publish` fails after the tag and push.
+    const repo = makeRepo(plugin())
+    const { status, stdout } = release(repo, ['minor', '--yes'], {
+      GITHUB_ACTIONS: 'true',
+      ACTIONS_ID_TOKEN_REQUEST_URL: 'https://token.test',
+      ACTIONS_ID_TOKEN_REQUEST_TOKEN: 'request',
+      CARGO_REGISTRY_TOKEN: '',
+      CARGO_REGISTRIES_CRATES_IO_TOKEN: '',
+      HOME: repo.root,
+    })
+    assert.equal(status, 1)
+    assert.match(stdout, /npm: trusted publishing \(OIDC\)/)
+    assert.match(stdout, /cargo has no publish credentials/)
+    assert.deepEqual(tagsOnRemote(repo), [], 'nothing mutated')
   })
 
   it('leaves a manifest on its own version line alone, and says why', () => {
@@ -561,7 +675,7 @@ describe('choosing where notes come from', () => {
   const withChangelog = () =>
     makeRepo({
       changelog: '# Changelog\n\n## [Unreleased]\n\n- Hand-written note.\n',
-      config: { publish: null, steps: ['tag'], notesFile: 'n.md' },
+      config: { publish: null, steps: ['version', 'tag'], notesFile: 'n.md' },
     })
 
   const tagAnnotation = (repo, tag) =>
@@ -815,6 +929,35 @@ describe('a release that was tagged but never published', () => {
     }
   })
 
+  it('refuses a named bump that would skip past it', () => {
+    // `auto` finishes the release it finds at HEAD; `minor` counted from its version and
+    // released 1.2.0 from the same commit — two tags, one of them permanently unpublished,
+    // and the registry receiving a version the v1.1.0 tag had already claimed.
+    const repo = halfReleased()
+    const { status, stdout } = release(repo, ['minor', '--yes'], REGISTRY)
+    assert.equal(status, 1)
+    assert.match(stdout, /v1\.1\.0 is tagged at HEAD but never reached the registry/)
+    assert.match(stdout, /re-run with no target, or with auto/)
+    assert.ok(!stdout.includes('ships its commits'), 'no contradictory absorb warning')
+    assert.deepEqual(tagsOnRemote(repo).sort(), ['v1.0.0', 'v1.1.0'], 'no v1.2.0')
+    assert.equal(
+      stubCalls(repo).filter((c) => c.startsWith('npm publish')).length,
+      1,
+      'only the dead run published',
+    )
+  })
+
+  it('lets a named bump absorb it once there is new work to commit', () => {
+    // With something new on disk the tag can no longer be finished — publishing would ship
+    // a tree it does not describe — so the bump is the documented absorb path.
+    const repo = halfReleased()
+    writeFileSync(join(repo.root, 'stray.txt'), 'more work')
+    const { status, stdout } = release(repo, ['minor', '--yes'], REGISTRY)
+    assert.equal(status, 0, stdout)
+    assert.match(stdout, /v1\.1\.0 was tagged but never published/)
+    assert.ok(tagsOnRemote(repo).includes('v1.2.0'))
+  })
+
   it('refuses to finish it with a working tree that would move HEAD past the tag', () => {
     // Publishing sends what is on disk, not what the tag describes. Committing the tree
     // first and publishing anyway would ship 1.1.0 as something the v1.1.0 tag does not
@@ -938,7 +1081,9 @@ describe('version markers in an arbitrary file', () => {
     assert.match(readFile(repo, 'README.md'), /npm i demo@1\.1\.0/)
   })
 
-  it('refuses to shred a file listed by mistake', () => {
+  it('refuses to shred a file listed by mistake, in preflight, before anything is written', () => {
+    // The refusal used to come from the write itself — after package.json, first in the
+    // list, had already been rewritten and left dirty on disk, under a raw stack trace.
     const repo = makeRepo({
       files: { 'README.md': '# demo\n\nA library.\n' },
       config: { versionFiles: ['README.md'], publish: null, steps: ['version'] },
@@ -947,6 +1092,40 @@ describe('version markers in an arbitrary file', () => {
     assert.equal(status, 1)
     assert.match(stdout, /would replace everything/)
     assert.equal(readFile(repo, 'README.md'), '# demo\n\nA library.\n')
+    assert.equal(JSON.parse(readFile(repo, 'package.json')).version, '1.0.0', 'nothing written')
+    assert.ok(!stdout.includes('at writeVersionInto'), 'a clean abort, not a stack trace')
+  })
+
+  it('refuses a Cargo.lock it cannot scope, in preflight', () => {
+    const repo = makeRepo({
+      files: { 'src-tauri/Cargo.lock': '[[package]]\nname = "adler2"\nversion = "2.0.1"\n' },
+      config: { versionFiles: ['src-tauri/Cargo.lock'], publish: null, steps: ['version'] },
+    })
+    const { status, stdout } = release(repo, ['minor', '--yes'])
+    assert.equal(status, 1)
+    assert.match(stdout, /fail\s+src-tauri\/Cargo\.lock lists every dependency's version/)
+    assert.ok(!stdout.includes('at cargoLockPattern'), 'a clean abort, not a stack trace')
+    assert.equal(JSON.parse(readFile(repo, 'package.json')).version, '1.0.0', 'nothing written')
+  })
+})
+
+describe('--sync', () => {
+  it('copies itself from a path containing a space', () => {
+    // A URL pathname is percent-encoded, so a copy installed under such a directory was
+    // reported as "piped from stdin" and refused to copy itself.
+    const base = mkdtempSync(join(tmpdir(), 'release kit '))
+    mkdirSync(join(base, 'tool'))
+    mkdirSync(join(base, 'target'))
+    writeFileSync(join(base, 'tool', 'release.mjs'), readFileSync(RELEASE_MJS, 'utf8'))
+    const stdout = execFileSync('node', [join(base, 'tool', 'release.mjs'), '--sync', 'target'], {
+      cwd: base,
+      encoding: 'utf8',
+    })
+    assert.match(stdout, /target: installed/)
+    assert.equal(
+      readFileSync(join(base, 'target', 'scripts', 'release.mjs'), 'utf8'),
+      readFileSync(RELEASE_MJS, 'utf8'),
+    )
   })
 })
 
