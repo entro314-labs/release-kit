@@ -3541,15 +3541,37 @@ for (const target of publishTargets) {
 // target published nothing, and telling downstream otherwise is a lie it may act on.
 if (publishedSomething) runHook('afterPublish')
 
+/**
+ * Whether a stable release above this version already exists, anywhere in the
+ * repository — not only in this branch's history, since a patch on an older line is
+ * cut from a branch the newer minor was never merged into.
+ *
+ * GitHub's "Latest" badge is what `releases/latest` resolves to, and `--latest`
+ * forces it. A backport patch that took it would point every "download the latest
+ * release" link at the older line.
+ */
+function supersededByExistingRelease() {
+  const listed = tryRead('git', ['tag', '--list', `${config.tagPrefix}*`]) ?? ''
+  return listed
+    .split('\n')
+    .map((name) => name.trim().slice(config.tagPrefix.length))
+    .filter((v) => parseVersion(v) && !parseVersion(v).pre.length)
+    .some((v) => compareVersions(v, version) > 0)
+}
+
 if (runs('release') && !releaseExists) {
   step(`GitHub release ${tag}`)
+  const latest = !isPrerelease && !supersededByExistingRelease()
+  if (!isPrerelease && !latest) {
+    note(`a newer stable release is already tagged — ${tag} will not be marked Latest`)
+  }
   const args = [
     'release',
     'create',
     tag,
     '--title',
     expand(config.releaseTitle),
-    isPrerelease ? '--prerelease' : '--latest',
+    isPrerelease ? '--prerelease' : `--latest=${latest}`,
     // Notes arrive on stdin, so there is no temp file and nothing to escape.
     ...(notes ? ['--notes-file', '-'] : ['--generate-notes']),
     ...config.assets,

@@ -54,6 +54,12 @@ All notable changes to @entro314labs/release-kit.
   release tag, counted tags from other branches, and ignored a package's configured
   `tagPrefix`. All four now match the release each package would actually run.
 
+- **A patch on an older line took GitHub's Latest badge.** Every stable release was
+  created with `--latest`, which forces the badge — and `releases/latest` with it — so
+  releasing `1.9.9` after `2.0.0` pointed every "download the latest release" link at
+  the older line. A stable release now yields when a higher stable tag already exists
+  anywhere in the repository, and says so.
+
 - **The dist-tag refusal named a flag that does not exist** (`--tag`; it is `--dist-tag`),
   and the usage text and configuration table still said `commit` was off by default.
 

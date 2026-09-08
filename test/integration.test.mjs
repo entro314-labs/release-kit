@@ -971,6 +971,42 @@ describe('a release that was tagged but never published', () => {
   })
 })
 
+describe('the Latest badge on GitHub', () => {
+  const gh = (repo) => stubCalls(repo).find((c) => c.startsWith('gh release create'))
+
+  it('goes to an ordinary stable release', () => {
+    const repo = makeRepo({ config: { publish: null } })
+    const { status, stdout } = release(repo, ['minor', '--yes'])
+    assert.equal(status, 0, stdout)
+    assert.match(gh(repo), /--latest=true/)
+  })
+
+  it('is not taken by a patch on an older line', () => {
+    // v2.0.0 was cut on another branch and never merged here; releasing 1.9.9 from this
+    // one must not point releases/latest at the older line.
+    const repo = makeRepo({ config: { publish: null, branch: null } })
+    execFileSync('git', ['checkout', '-q', '-b', 'next'], { cwd: repo.root })
+    writeFileSync(join(repo.root, 'two.txt'), 'x')
+    execFileSync('git', ['add', '-A'], { cwd: repo.root })
+    execFileSync('git', ['commit', '-qm', 'feat!: two'], { cwd: repo.root })
+    execFileSync('git', ['tag', '-a', 'v2.0.0', '-m', 'two'], { cwd: repo.root })
+    execFileSync('git', ['checkout', '-q', 'main'], { cwd: repo.root })
+
+    const { status, stdout } = release(repo, ['1.9.9', '--yes'])
+    assert.equal(status, 0, stdout)
+    assert.match(stdout, /will not be marked Latest/)
+    assert.match(gh(repo), /--latest=false/)
+  })
+
+  it('never applies to a prerelease', () => {
+    const repo = makeRepo({ config: { publish: null } })
+    const { status, stdout } = release(repo, ['2.0.0-rc.1', '--yes'])
+    assert.equal(status, 0, stdout)
+    assert.match(gh(repo), /--prerelease/)
+    assert.doesNotMatch(gh(repo), /--latest/)
+  })
+})
+
 describe('pushing the commit and the tag', () => {
   it('sends them as one transaction', () => {
     // --follow-tags decides which refs go; --atomic decides whether they go together.
