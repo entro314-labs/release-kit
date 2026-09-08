@@ -78,6 +78,11 @@ export function parseSemver(version) {
   return { major: +match[1], minor: +match[2], patch: +match[3], prerelease: match[4] ?? null }
 }
 
+/**
+ * Precedence per semver §11, the same ordering release.mjs `compareVersions` applies. It
+ * has to be, because this decides which tag is a package's last release: ranking every
+ * prerelease equal left `rc.9` and `rc.10` in `git tag` order, which is alphabetical.
+ */
 export function compareSemver(a, b) {
   const pa = parseSemver(a)
   const pb = parseSemver(b)
@@ -85,18 +90,45 @@ export function compareSemver(a, b) {
   for (const key of ['major', 'minor', 'patch']) {
     if (pa[key] !== pb[key]) return pa[key] - pb[key]
   }
-  if (pa.prerelease && !pb.prerelease) return -1
-  if (!pa.prerelease && pb.prerelease) return 1
+  if (!pa.prerelease && !pb.prerelease) return 0
+  if (!pa.prerelease) return 1
+  if (!pb.prerelease) return -1
+  const x = pa.prerelease.split('.')
+  const y = pb.prerelease.split('.')
+  for (let i = 0; i < Math.max(x.length, y.length); i += 1) {
+    const left = x[i]
+    const right = y[i]
+    if (left === undefined) return -1
+    if (right === undefined) return 1
+    if (left === right) continue
+    const leftNumeric = /^\d+$/.test(left)
+    const rightNumeric = /^\d+$/.test(right)
+    if (leftNumeric && rightNumeric) return Number(left) - Number(right)
+    // Numeric identifiers always have lower precedence than alphanumeric ones.
+    if (leftNumeric !== rightNumeric) return leftNumeric ? -1 : 1
+    return left < right ? -1 : 1
+  }
   return 0
 }
 
+/**
+ * The bumps a train plans, with release.mjs `incrementVersion`'s arithmetic for them: a
+ * major/minor/patch off a prerelease releases that prerelease's base when the base already
+ * satisfies the bump, so `2.0.0-beta.1` + `patch` is `2.0.0` — not the `2.0.1` a naive
+ * increment gives, which release-kit would then never produce.
+ */
 export function bumpSemver(version, bump) {
   const v = parseSemver(version)
   if (!v) return null
   if (bump === 'as-is') return version
-  if (bump === 'major') return `${v.major + 1}.0.0`
-  if (bump === 'minor') return `${v.major}.${v.minor + 1}.0`
-  return `${v.major}.${v.minor}.${v.patch + 1}`
+  const pre = v.prerelease !== null
+  if (bump === 'major') {
+    return pre && v.minor === 0 && v.patch === 0 ? `${v.major}.0.0` : `${v.major + 1}.0.0`
+  }
+  if (bump === 'minor') {
+    return pre && v.patch === 0 ? `${v.major}.${v.minor}.0` : `${v.major}.${v.minor + 1}.0`
+  }
+  return pre ? `${v.major}.${v.minor}.${v.patch}` : `${v.major}.${v.minor}.${v.patch + 1}`
 }
 
 /**
@@ -339,6 +371,8 @@ export function discover(rootDir, config) {
       repoRelPath: repoDir ? relative(repoDir, dir) || '.' : null,
       publish: entry.publish !== false,
       branch: releaseConfig.branch === undefined ? 'main' : releaseConfig.branch,
+      // The prefix release-kit will tag with, and so the one its history is read under.
+      tagPrefix: releaseConfig.tagPrefix ?? 'v',
       ...manifest,
     })
   }
@@ -416,19 +450,24 @@ export function topoSort(orderEdges) {
 // ─────────────────────────────────────────────────────────────────────────────
 
 /**
- * Tag scheme: `v<version>` when the repo owns exactly one member, `<name>@<version>` when
- * it owns several — which keeps single-package repos identical to standalone release-kit.
+ * Tag scheme: the package's own `tagPrefix` (`v` unless its release.config.json says
+ * otherwise) when the repo owns exactly one member, `<name>@<version>` when it owns
+ * several — which keeps single-package repos identical to standalone release-kit.
  */
 export function tagPatternFor(member, repoMemberCount) {
-  return repoMemberCount > 1
-    ? { prefix: `${member.name}@`, glob: `${member.name}@*` }
-    : { prefix: 'v', glob: 'v*' }
+  if (repoMemberCount > 1) return { prefix: `${member.name}@`, glob: `${member.name}@*` }
+  const prefix = member.tagPrefix ?? 'v'
+  return { prefix, glob: `${prefix}*` }
 }
 
 function lastReleaseTag(member, repoMemberCount) {
   if (!member.repoDir) return null
   const { prefix, glob } = tagPatternFor(member, repoMemberCount)
-  const tags = git(member.repoDir, ['tag', '--list', glob], { allowFailure: true })
+  // `--merged HEAD`, as release.mjs reads it: a tag made on another branch is not this
+  // branch's last release, and the commits it would hide are still unreleased here.
+  const tags = git(member.repoDir, ['tag', '--list', glob, '--merged', 'HEAD'], {
+    allowFailure: true,
+  })
   if (!tags) return null
   const versions = tags
     .split('\n')

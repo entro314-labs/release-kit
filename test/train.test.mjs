@@ -1,6 +1,8 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 
+import semver from 'semver'
+
 import {
   buildGraph,
   buildSummary,
@@ -38,6 +40,41 @@ test('bumpSemver, including as-is', () => {
   assert.equal(bumpSemver('2.4.2', 'minor'), '2.5.0')
   assert.equal(bumpSemver('2.4.2', 'major'), '3.0.0')
   assert.equal(bumpSemver('2.4.2', 'as-is'), '2.4.2')
+})
+
+// The train plans what release-kit will run, so its arithmetic has to be release-kit's —
+// which is `semver.inc`'s. A prerelease manifest is where a naive increment diverges: the
+// plan said 2.0.1 for a package release-kit was going to release as 2.0.0.
+test('bumpSemver matches semver.inc off a prerelease, as release-kit does', () => {
+  for (const version of ['1.2.3', '2.0.0-beta.1', '2.0.0-rc.9', '1.2.0-alpha.0', '3.0.0-0']) {
+    for (const bump of ['major', 'minor', 'patch']) {
+      assert.equal(bumpSemver(version, bump), semver.inc(version, bump), `${version} + ${bump}`)
+    }
+  }
+})
+
+test('compareSemver matches semver.compare, prerelease identifiers included', () => {
+  // Ranking every prerelease equal left the last release tag to `git tag` order, which is
+  // alphabetical: rc.9 outranked rc.10.
+  const all = [
+    '1.0.0',
+    '1.0.1',
+    '2.0.0',
+    '1.0.0-alpha',
+    '1.0.0-alpha.1',
+    '1.0.0-alpha.beta',
+    '1.0.0-beta',
+    '1.0.0-beta.2',
+    '1.0.0-beta.11',
+    '1.0.0-rc.1',
+    '2.0.0-rc.9',
+    '2.0.0-rc.10',
+  ]
+  for (const a of all) {
+    for (const b of all) {
+      assert.equal(Math.sign(compareSemver(a, b)), semver.compare(a, b), `${a} vs ${b}`)
+    }
+  }
 })
 
 test('bumpFromCommits: feat → minor, breaking → major, softened below 1.0.0', () => {
@@ -109,6 +146,14 @@ test('tagPatternFor: plain v-prefix for single-package repos, name@ for shared r
   const m = { name: '@x/shared' }
   assert.deepEqual(tagPatternFor(m, 1), { prefix: 'v', glob: 'v*' })
   assert.deepEqual(tagPatternFor(m, 7), { prefix: '@x/shared@', glob: '@x/shared@*' })
+})
+
+test('tagPatternFor honours the tagPrefix a single-package repo releases with', () => {
+  // release-kit tags with the package's configured prefix; reading history under `v`
+  // would find no tags and plan a cold start for a package with a hundred releases.
+  const m = { name: '@x/shared', tagPrefix: 'release-' }
+  assert.deepEqual(tagPatternFor(m, 1), { prefix: 'release-', glob: 'release-*' })
+  assert.deepEqual(tagPatternFor(m, 2), { prefix: '@x/shared@', glob: '@x/shared@*' })
 })
 
 test('rewriteRange honours policy and leaves workspace ranges alone', () => {

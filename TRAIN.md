@@ -12,7 +12,11 @@ readable, vendorable, zero dependencies.
 **Status: prototype.** Discovery, graph derivation, registry-aware change detection,
 cascade, planning, whole-train preflight, `seed-tags`, and the train summary work.
 Execution (running release-kit per package) is not implemented yet — `train` without
-`--dry-run` says so and exits.
+`--dry-run` says so and exits. Three things the design below describes are not built
+either, and the plan does not claim them: taking `packages` from `pnpm-workspace.yaml` /
+`workspaces` when the config omits it (the config must list them today), and the two
+per-package authentication checks in the preflight table (publish CLI and `gh`), which
+each package's own release-kit run performs when execution lands.
 
 ```sh
 release-train graph                  # print the derived dependency graph and topo order
