@@ -21,7 +21,7 @@ jobs:
       - uses: pnpm/action-setup@v6
       - uses: actions/setup-node@v7
         with:
-          node-version: 22
+          node-version: 24
           cache: pnpm
       - run: pnpm install --frozen-lockfile
       - name: Identify git to the fixtures
@@ -43,9 +43,9 @@ jobs:
       - uses: actions/checkout@v7
         with:
           fetch-depth: 0 # the range below spans the whole branch
-      - uses: actions/setup-node@v6
+      - uses: actions/setup-node@v7
         with:
-          node-version: 22
+          node-version: 24
       - name: Lint the pull request title
         env:
           TITLE: ${{ github.event.pull_request.title }}
