@@ -4,6 +4,8 @@ All notable changes to @entro314labs/release-kit.
 
 ## [Unreleased]
 
+## [2.9.4] - 2026-09-09
+
 ### Fixed
 
 - **An unknown flag was dropped without a word, and released a different version.**
@@ -728,7 +730,8 @@ null` now means "no publish command configured" rather than "skip publishing", a
 - **`--sync`** to vendor the script into projects that should not depend on the registry
   they are about to publish to.
 
-[Unreleased]: https://github.com/entro314-labs/release-kit/compare/v2.9.3...HEAD
+[Unreleased]: https://github.com/entro314-labs/release-kit/compare/v2.9.4...HEAD
+[2.9.4]: https://github.com/entro314-labs/release-kit/compare/v2.9.3...v2.9.4
 [2.9.3]: https://github.com/entro314-labs/release-kit/compare/v2.9.2...v2.9.3
 [2.9.2]: https://github.com/entro314-labs/release-kit/compare/v2.9.1...v2.9.2
 [2.9.1]: https://github.com/entro314-labs/release-kit/compare/v2.9.0...v2.9.1
