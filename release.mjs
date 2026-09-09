@@ -187,6 +187,7 @@ release-kit — tag, publish, and release a JS/TS/Node project.
 
 Target (optional; defaults to the version already in package.json):
   <x.y.z>              release this exact version
+  auto                 infer the bump from the commits since the last tag
   patch minor major    bump from the current version
   prepatch preminor premajor prerelease
                        prerelease bump; needs --preid unless it can be inferred
@@ -2040,6 +2041,9 @@ const VALUE_OPTIONS = new Set([
   '--assistant-effort',
 ])
 
+/** Flags that take no value. With VALUE_OPTIONS, the whole vocabulary this file accepts. */
+const BOOLEAN_FLAGS = new Set(['--dry-run', '--yes', '-y', '--commit', '--help', '-h', '--sync'])
+
 /** The version or bump target: the only argument that is neither a flag nor a flag's value. */
 const positionals = []
 for (let i = 0; i < argv.length; i += 1) {
@@ -2047,7 +2051,20 @@ for (let i = 0; i < argv.length; i += 1) {
     i += 1
     continue
   }
-  if (!argv[i].startsWith('-')) positionals.push(argv[i])
+  if (!argv[i].startsWith('-')) {
+    positionals.push(argv[i])
+    continue
+  }
+  // An unknown flag used to be dropped without a word, and `--auto` is the one people
+  // reach for: it released whatever version package.json already carried, which is a
+  // different release from the `auto` they asked for.
+  if (!BOOLEAN_FLAGS.has(argv[i])) {
+    const bare = argv[i].replace(/^-+/, '')
+    const hint = BUMPS.has(bare)
+      ? `\n  The target is positional: ${INVOCATION} ${bare}, not ${argv[i]}`
+      : ''
+    abort(`unknown flag: ${argv[i]}${hint}`)
+  }
 }
 const target = positionals[0]
 // A second positional is always a mistake, and silently ignoring it changes the release

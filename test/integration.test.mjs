@@ -94,6 +94,19 @@ describe('preflight', () => {
     assert.match(stdout, /--assistant auto/)
   })
 
+  it('rejects an unknown flag instead of dropping it and releasing a different version', () => {
+    const repo = makeRepo()
+    const { status, stdout } = release(repo, ['--auto', '--assistant', 'auto', '--yes'])
+    assert.equal(status, 1)
+    assert.match(stdout, /unknown flag: --auto/)
+    assert.match(stdout, /target is positional: .* auto, not --auto/)
+
+    const bogus = release(repo, ['minor', '--bogus', '--yes'])
+    assert.equal(bogus.status, 1)
+    assert.match(bogus.stdout, /unknown flag: --bogus/)
+    assert.doesNotMatch(bogus.stdout, /positional/)
+  })
+
   it('commits a dirty tree without an assistant, using a generated message', () => {
     const repo = makeRepo()
     writeFileSync(join(repo.root, 'junk.txt'), 'x')

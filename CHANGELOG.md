@@ -6,6 +6,15 @@ All notable changes to @entro314labs/release-kit.
 
 ### Fixed
 
+- **An unknown flag was dropped without a word, and released a different version.**
+  `release-kit --auto --assistant auto` is the habitual spelling, but the target is
+  positional: `--auto` matched nothing, `--assistant` consumed the `auto` after it, and the
+  run fell back to the version already in `package.json` — a re-release of what was just
+  shipped, reported as "releasing the version already in package.json" with nothing saying
+  a flag had been ignored. A flag this file does not know is now an error, and one that
+  spells a bump target says so: `release-kit auto`, not `--auto`. The usage text also lists
+  `auto` among the targets, which it never did.
+
 - **A relative bump re-run after a dead run released the wrong version.** "Re-run the same
   command" is how a failed release is documented to recover, and `patch`/`minor`/`major`
   were the targets it was wrong for, in two shapes. A run that wrote the version and died
