@@ -847,15 +847,23 @@ Two upstream habits make commit-derived notes trustworthy, and neither is releas
         github.event.workflow_run.conclusion == 'success'
       runs-on: ubuntu-latest
       steps:
+        - uses: actions/create-github-app-token@v3
+          id: app-token
+          with:
+            client-id: ${{ vars.RELEASE_APP_CLIENT_ID }}
+            private-key: ${{ secrets.RELEASE_APP_PRIVATE_KEY }}
         - uses: actions/checkout@v7
           with:
             ref: ${{ github.event.workflow_run.head_sha }}
             fetch-depth: 0
+            token: ${{ steps.app-token.outputs.token }} # so the tag push triggers workflows
         # Checking out a SHA leaves a detached HEAD, which release-kit refuses — there is no
         # branch to push. Put main back at the commit CI checked; if main has moved on
         # since, preflight refuses as "behind origin/main" instead of releasing it unchecked.
         - run: git switch -C main
         - run: npx @entro314labs/release-kit@2.9.4 auto --yes
+          env:
+            GITHUB_TOKEN: ${{ steps.app-token.outputs.token }}
   ```
 
   [`requireGreen`](#requiring-a-green-head) is the same gate inside release-kit, for a
