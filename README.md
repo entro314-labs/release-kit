@@ -97,7 +97,7 @@ release-kit minor
 No global state to drift, no install step, and the version is explicit in the command.
 
 ```sh
-npx @entro314labs/release-kit@2.3.0 minor --yes
+npx @entro314labs/release-kit@2.9.4 minor --yes
 ```
 
 ### Vendored — no registry at release time
@@ -227,7 +227,7 @@ commit released is the **pull request title**, which no hook ever sees — check
 - name: Lint the pull request title
   env:
     TITLE: ${{ github.event.pull_request.title }}
-  run: npx @entro314labs/release-kit@2.8.0 lint-commits --subject "$TITLE"
+  run: npx @entro314labs/release-kit@2.9.4 lint-commits --subject "$TITLE"
 ```
 
 Pass the title through `env`, never through `${{ }}` inside `run:` — a pull request title is
@@ -655,7 +655,9 @@ later — and the overlays that carry no `version` of their own are skipped rath
 failing the release.
 
 Stopping at `push` because the tag is what triggers the build pipeline — see
-[Libraries versus apps](#-libraries-versus-apps).
+[Libraries versus apps](#-libraries-versus-apps). When release-kit itself runs in CI, the
+push must not use `GITHUB_TOKEN`, or the tag triggers nothing — see
+[Continuous integration](#continuous-integration).
 
 The project name comes from the manifest when there is one (`name` in `package.json`,
 `Cargo.toml` or `pyproject.toml`), and falls back to the repository directory.
@@ -715,13 +717,19 @@ Non-interactive by default: the confirmation prompt is skipped when stdin is not
 `gh` picks up `GITHUB_TOKEN` on its own. Pass `--yes` to be explicit.
 
 ```yaml
-- uses: actions/checkout@v5
+- uses: actions/create-github-app-token@v3
+  id: app-token
+  with:
+    client-id: ${{ vars.RELEASE_APP_CLIENT_ID }}
+    private-key: ${{ secrets.RELEASE_APP_PRIVATE_KEY }}
+- uses: actions/checkout@v7
   with:
     fetch-depth: 0 # release notes and the last-tag lookup need real history
+    token: ${{ steps.app-token.outputs.token }} # the push below is made with this token
 - id: release
-  run: npx @entro314labs/release-kit@2.3.0 minor --yes
+  run: npx @entro314labs/release-kit@2.9.4 minor --yes
   env:
-    GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    GITHUB_TOKEN: ${{ steps.app-token.outputs.token }}
 - run: echo "shipped ${{ steps.release.outputs.tag }} ${{ steps.release.outputs.release-url }}"
 ```
 
@@ -730,11 +738,60 @@ re-deriving it: `version`, `tag`, `name`, `dist-tag`, `steps`, `published`, `rel
 Nothing is written on a dry run, and an unwritable `$GITHUB_OUTPUT` never fails a release
 that already completed.
 
+**A tag pushed with `GITHUB_TOKEN` triggers nothing.** GitHub deliberately does not start
+workflows from events caused by the job's own `GITHUB_TOKEN`, so an `on: push: tags` build
+workflow never runs for a tag release-kit pushed with it — the release is tagged and the
+build that was supposed to follow it silently does not happen. The push uses whatever token
+`actions/checkout` persisted, which is why the example gives checkout a
+[GitHub App](https://docs.github.com/en/apps/creating-github-apps/authenticating-with-a-github-app/making-authenticated-api-requests-with-a-github-app-in-a-github-actions-workflow)
+installation token (`actions/create-github-app-token`) — a fine-grained personal access
+token with `contents: write` works the same way. Leave `persist-credentials` on for this
+job: the push has nothing to authenticate with otherwise. The alternative that needs no
+second identity is not to rely on the tag event at all: run the build in the same workflow
+after the release job (`needs: release`), or call it as a reusable workflow
+(`on: workflow_call`) with the tag from `steps.release.outputs.tag`. With `GITHUB_TOKEN`
+alone, the example above still releases correctly; only the tag-triggered follow-up is lost.
+
 Two upstream habits make commit-derived notes trustworthy, and neither is release-kit's job:
 
 - **Gate the release on CI, and guard against forks.** Trigger on `workflow_run` after your
-  check workflow succeeds, with `if: github.repository_owner == 'your-org'` so a fork never
-  tries to release.
+  check workflow completes — but that event fires for _every_ completed run of it, including
+  pull request runs and failed ones, so the condition has to say which run may release.
+  `workflow_run` also checks out the default branch's latest commit, not the commit that
+  was checked, so check out `head_sha` explicitly:
+
+  ```yaml
+  on:
+    workflow_run:
+      workflows: [check]
+      types: [completed]
+      branches: [main]
+
+  jobs:
+    release:
+      # A push to main that passed, in this repository — not a fork's copy of the workflow.
+      if: >-
+        github.repository_owner == 'your-org' &&
+        github.event.workflow_run.event == 'push' &&
+        github.event.workflow_run.head_branch == 'main' &&
+        github.event.workflow_run.conclusion == 'success'
+      runs-on: ubuntu-latest
+      steps:
+        - uses: actions/checkout@v7
+          with:
+            ref: ${{ github.event.workflow_run.head_sha }}
+            fetch-depth: 0
+        # Checking out a SHA leaves a detached HEAD, which release-kit refuses — there is no
+        # branch to push. Put main back at the commit CI checked; if main has moved on
+        # since, preflight refuses as "behind origin/main" instead of releasing it unchecked.
+        - run: git switch -C main
+        - run: npx @entro314labs/release-kit@2.9.4 auto --yes
+  ```
+
+  `branches: [main]` narrows the trigger to runs on `main`, but a pull request from a fork
+  whose branch is named `main` matches it too; `event == 'push'` is what rules pull request
+  runs out. The owner check stops a fork's own copy of the workflow from trying to release.
+
 - **Validate pull request titles.** A squash-merge takes its subject from the PR title, so
   that title becomes the commit the notes are built from. Check it with
   [`lint-commits`](#linting-commits), which uses this tool's own parser rather than a second
@@ -960,7 +1017,9 @@ at the pushed tag:
 ```
 
 Nothing after `push` — no `publish`, no `release`. The tag push is the handoff, and it is
-what triggers the build workflow. The notes travel in the annotated tag, which is the one
+what triggers the build workflow — unless it was pushed with `GITHUB_TOKEN` from another
+workflow, which triggers nothing ([Continuous integration](#continuous-integration) has the
+fix). The notes travel in the annotated tag, which is the one
 thing that reaches a fresh checkout on another machine; the signature block a signed tag
 appends is stripped before the file is handed over:
 
@@ -972,7 +1031,7 @@ on:
 jobs:
   build:
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
         with: { fetch-depth: 0 }
       - name: Read the release notes off the tag
         run: |

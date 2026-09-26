@@ -4,6 +4,21 @@ All notable changes to @entro314labs/release-kit.
 
 ## [Unreleased]
 
+### Documentation
+
+- **The CI example released a tag that triggered nothing.** It ran release-kit with
+  `GITHUB_TOKEN`, and GitHub starts no workflow from a push made with the job's own token —
+  so the `on: push: tags` build the README says the tag hands off to never ran. The example
+  now pushes with a GitHub App token through `actions/checkout`'s `token:`, and names
+  `needs:` / `workflow_call` as the way to chain a build without a second identity.
+- **The "gate on CI" recipe released from pull request and failed runs.** `workflow_run`
+  fires for every completed run of the check workflow; the owner check only stopped forks.
+  The recipe now requires a successful `push` run on `main`, checks out the commit that was
+  checked (`head_sha`, not the branch tip) and puts the branch back on it so preflight's
+  detached-HEAD and behind-remote checks still apply.
+- The examples pin `actions/checkout@v7` and `release-kit@2.9.4` instead of `v5`, `2.3.0`
+  and `2.8.0`.
+
 ## [2.9.4] - 2026-09-09
 
 ### Fixed
