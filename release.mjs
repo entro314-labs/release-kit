@@ -3756,11 +3756,13 @@ if (notesSource === 'github') {
       }
       if (draftedNotes) {
         notes = draftedNotes
-        ok(
-          notesSource === 'commits' || !assistant
-            ? 'release notes built from the commit log'
-            : `release notes drafted by ${assistantName}`,
-        )
+        // An "ok" under the failure above would contradict it: these notes are refused.
+        if (!unsure.length || confirming)
+          ok(
+            notesSource === 'commits' || !assistant
+              ? 'release notes built from the commit log'
+              : `release notes drafted by ${assistantName}`,
+          )
       } else if (notesSource === 'auto') {
         warn(
           `no ${config.changelog ?? 'changelog'} section and nothing to draft from — GitHub will generate the notes`,

@@ -1083,6 +1083,7 @@ describe('drafted entries the assistant marked [???]', () => {
     assert.match(stdout, /marked 1 drafted entry \[\?\?\?\]/)
     assert.match(stdout, /- \[\?\?\?\] Tweaks the retry loop/)
     assert.match(stdout, /Re-run without --yes in a terminal/)
+    assert.ok(!/ok +release notes drafted/.test(stdout), 'no "ok" for notes it just refused')
     assert.deepEqual(tagsOnRemote(repo), ['v1.0.0'], 'nothing was tagged')
     assert.equal(JSON.parse(readFile(repo, 'package.json')).version, '1.0.0')
   })
