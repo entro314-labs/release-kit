@@ -779,6 +779,21 @@ describe('drafted release notes', () => {
     assert.match(sent, /raise the badge z-index\n {2}Notes: The pull request badge stays on top/)
     assert.ok(!sent.includes('move the parser'), 'the no-notes commit never reaches the model')
   })
+
+  it('keeps shipped components and asks for fixes as what works now', () => {
+    // Dropping every dependency bump hid the updates users actually run: a bundled
+    // runtime or an embedded engine is the product, whatever the commit type says.
+    const { repo, commit, prompt } = drafting()
+    commit('fix: keep the cursor in place after a paste')
+
+    const { status, stdout } = release(repo, ['1.1.0', '--assistant', 'claude', '--yes'], {
+      CLAUDE_DRAFT: '### Fixed\n\n- The cursor stays in place after a paste',
+    })
+    assert.equal(status, 0, stdout)
+    const sent = readFileSync(prompt, 'utf8')
+    assert.match(sent, /except a component that ships inside the product/)
+    assert.match(sent, /describe what works now, not what was broken/)
+  })
 })
 
 describe('which tag a release reads history from', () => {

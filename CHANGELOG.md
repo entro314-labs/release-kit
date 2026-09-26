@@ -11,6 +11,14 @@ All notable changes to @entro314labs/release-kit.
   with the instruction to keep the author's wording. `Notes: no-notes` keeps a commit out of
   the notes altogether, without changing the version bump it implies.
 
+### Changed
+
+- **Drafted notes keep updates to components that ship inside the product.** The assistant
+  was told to omit every dependency bump, which also dropped a bundled runtime, a sidecar
+  or an embedded engine moving to a new version — code users actually run. Those are now
+  kept and named with their new version; other dependency bumps are still left out. The
+  prompt also asks for a fix to be described as what works now, not what was broken.
+
 ### Documentation
 
 - **The CI example released a tag that triggered nothing.** It ran release-kit with

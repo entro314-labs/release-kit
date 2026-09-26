@@ -982,6 +982,12 @@ downgrade, so a configured pipeline fails loudly; `"auto"` degrades quietly by d
   annotation, and posted as the GitHub release body — the same "written once, lands in three
   places" path a hand-written section takes.
 
+The prompt asks for notes written for someone upgrading: internal chores (CI, formatting,
+version and dependency bumps) are left out, except a dependency that ships inside the
+product — a bundled runtime, a sidecar binary, an embedded engine — since users run that
+code; a fix is described as what works now rather than what was broken; and a commit's
+[`Notes:` line](#release-notes) is kept in the author's words.
+
 With `--commit`, notes are drafted _after_ that commit lands, so they describe the change it
 just made. Merge, release, `WIP` and `fixup!`/`squash!` commits are excluded from the prompt.
 
