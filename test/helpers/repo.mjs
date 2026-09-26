@@ -104,6 +104,7 @@ exit 0
     `#!/bin/sh
 echo "npm $*" >> "${calls}"
 case "$1" in
+  --version) echo "\${NPM_VERSION-11.6.0}"; exit 0 ;;
   whoami) echo "test-npm-user"; exit \${NPM_AUTHED:-0} ;;
   publish) exit \${NPM_PUBLISH_FAILS:-0} ;;
   view)

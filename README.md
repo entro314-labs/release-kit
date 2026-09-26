@@ -921,7 +921,10 @@ Two npm behaviours are handled automatically:
   `id-token: write`, or GitLab CI/CircleCI with `NPM_ID_TOKEN`, `whoami` fails while
   `publish` succeeds. That environment is detected and the auth check is skipped, so a
   valid CI release is not aborted over a missing token it does not need. That covers the
-  CLIs that exchange the OIDC token themselves — npm, pnpm, bun and `uv publish`. cargo is
+  CLIs that exchange the OIDC token themselves — npm, pnpm, bun and `uv publish`. npm
+  only learned to in 11.5.1, and an older one fails the publish after the tag and push, so
+  under OIDC an older `npm` is a preflight failure (`npm install -g npm@latest` fixes it).
+  pnpm and bun document no minimum and are not checked. cargo is
   not one of them: crates.io's trusted publishing goes through an action that turns the
   token into `CARGO_REGISTRY_TOKEN`, so the cargo credential check still applies in CI.
 

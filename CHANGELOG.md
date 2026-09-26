@@ -29,6 +29,13 @@ All notable changes to @entro314labs/release-kit.
   crate it publishes), plus `--locked` when there is a `Cargo.lock`, and refuses on a
   failure or an oversized `.crate`. It costs a compile, as publishing does.
 
+### Fixed
+
+- **An npm too old for trusted publishing failed after the push.** Under OIDC the token
+  check is skipped, and nothing asked which npm would run the publish — but trusted
+  publishing needs npm 11.5.1 or later, and an older one fails at `npm publish`, after the
+  tag and the push. Preflight now refuses it and says to run `npm install -g npm@latest`.
+
 ### Changed
 
 - **Drafted notes keep updates to components that ship inside the product.** The assistant

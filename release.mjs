@@ -3359,10 +3359,32 @@ if (!runs('release')) {
  */
 const OIDC_CLIS = new Set([...NPM_CLIS, 'uv'])
 
+/**
+ * The oldest npm CLI that publishes over OIDC. An older one finds no token and fails the
+ * publish — after the tag and the push, since nothing before that step asks it anything.
+ * https://docs.npmjs.com/trusted-publishers states the minimum; pnpm and bun implement the
+ * exchange themselves and document no equivalent, so only npm is checked.
+ */
+const NPM_OIDC_MIN = '11.5.1'
+
 /** Whether one publish CLI can publish at all: OIDC, a token, or a live session. */
 function checkCredentials({ cli, registry, command }) {
   if (isTrustedPublishing && OIDC_CLIS.has(cli)) {
     ok(`${cli}: trusted publishing (OIDC) — no token needed`)
+    if (cli === 'npm') {
+      const npmVersion = tryRead('npm', ['--version'])
+      if (!npmVersion || !parseVersion(npmVersion)) {
+        warn(
+          `npm: could not read its version — trusted publishing needs npm ${NPM_OIDC_MIN} or later`,
+        )
+      } else if (compareVersions(npmVersion, NPM_OIDC_MIN) < 0) {
+        fail(
+          `npm ${npmVersion} cannot publish with trusted publishing, which needs npm ` +
+            `${NPM_OIDC_MIN} or later — the publish would fail after the tag and push.\n` +
+            '       Update it before releasing: npm install -g npm@latest',
+        )
+      }
+    }
     // Provenance is the other half of what OIDC makes possible: a signed attestation
     // tying the published artefact to the workflow and commit that produced it. It is
     // not added to the command here — npm generates it for a trusted publish on its own,

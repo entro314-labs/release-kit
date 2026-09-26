@@ -367,6 +367,13 @@ describe('non-Node projects', () => {
   })
 })
 
+/** A GitHub Actions job with `id-token: write`: npm publishes over OIDC with no token. */
+const OIDC = {
+  GITHUB_ACTIONS: 'true',
+  ACTIONS_ID_TOKEN_REQUEST_URL: 'https://token.test',
+  ACTIONS_ID_TOKEN_REQUEST_TOKEN: 'request',
+}
+
 describe('one repository, two ecosystems', () => {
   // A Tauri plugin is a crate and an npm package built from one source tree: both
   // manifests sit at the root, carry the same version, and publish on the same release.
@@ -569,6 +576,33 @@ describe('one repository, two ecosystems', () => {
     assert.equal(status, 0, stdout)
     assert.equal(readFile(repo, 'VERSION'), '1.1.0\n')
     assert.match(readFile(repo, 'Cargo.toml'), /^version = "1\.0\.0"$/m)
+  })
+})
+
+describe('trusted publishing', () => {
+  it('refuses trusted publishing with an npm too old to do it', () => {
+    // npm below 11.5.1 finds no token under OIDC and fails the publish — after the push.
+    const repo = makeRepo({ config: { steps: ['version', 'tag', 'push', 'publish'] } })
+    const { status, stdout } = release(repo, ['minor', '--yes'], {
+      ...OIDC,
+      NPM_VERSION: '10.9.2',
+    })
+    assert.equal(status, 1, stdout)
+    assert.match(
+      stdout,
+      /npm 10\.9\.2 cannot publish with trusted publishing, which needs npm 11\.5\.1/,
+    )
+    assert.match(stdout, /npm install -g npm@latest/)
+    assert.deepEqual(tagsOnRemote(repo), [])
+  })
+
+  it('accepts the minimum npm for trusted publishing, and warns on an unreadable one', () => {
+    const repo = makeRepo({ config: { steps: ['version', 'tag', 'push', 'publish'] } })
+    const exact = release(repo, ['minor', '--yes', '--dry-run'], { ...OIDC, NPM_VERSION: '11.5.1' })
+    assert.ok(!/cannot publish with trusted publishing/.test(exact.stdout), exact.stdout)
+    const unknown = release(repo, ['minor', '--yes', '--dry-run'], { ...OIDC, NPM_VERSION: '' })
+    assert.match(unknown.stdout, /npm: could not read its version/)
+    assert.ok(!/fail /.test(unknown.stdout), unknown.stdout)
   })
 })
 
