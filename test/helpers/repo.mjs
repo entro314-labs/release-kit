@@ -36,7 +36,7 @@ export function makeRepo({
 } = {}) {
   const root = mkdtempSync(join(tmpdir(), 'release-kit-repo-'))
   const remote = `${root}-origin.git`
-  const calls = join(root, '..', `${root.split('/').pop()}-calls.log`)
+  const calls = `${root}-calls.log`
 
   if (manifest) {
     writeFileSync(
