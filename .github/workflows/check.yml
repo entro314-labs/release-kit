@@ -6,9 +6,14 @@ on:
     branches: [main]
   pull_request:
 
+# Nothing here writes to the repository: the tests push only to throwaway local remotes.
+permissions:
+  contents: read
+
 jobs:
   check:
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:
@@ -18,6 +23,8 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0 # the integration tests build real repositories with real history
+          # The fixture repositories push to local bare remotes; nothing needs the token.
+          persist-credentials: false
       - uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6.0.10
         with:
           # v6 no longer guesses: without a version here or a `packageManager` field it
@@ -44,10 +51,12 @@ jobs:
   commits:
     if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0 # the range below spans the whole branch
+          persist-credentials: false
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: 24
