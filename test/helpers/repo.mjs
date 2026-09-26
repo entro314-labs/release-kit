@@ -131,6 +131,27 @@ exit 0
   return bin
 }
 
+/**
+ * Put a `claude` on the fixture's PATH that answers every prompt with $CLAUDE_DRAFT and
+ * saves the prompt it was given, so a test can assert on both sides of a draft. Opt-in:
+ * with it on PATH, `--assistant auto` would stop meaning "nothing installed".
+ *
+ * @returns {string} the path the last prompt is written to
+ */
+export function stubAssistant(repo) {
+  const prompt = `${repo.root}-prompt.txt`
+  writeFileSync(
+    join(repo.bin, 'claude'),
+    `#!/bin/sh
+[ "$1" = "--version" ] && { echo "stub 1.0"; exit 0; }
+cat > "${prompt}"
+printf '%s' "$CLAUDE_DRAFT"
+`,
+  )
+  chmodSync(join(repo.bin, 'claude'), 0o755)
+  return prompt
+}
+
 /** Run release.mjs in a fixture. Never throws — tests assert on status and output. */
 export function release(repo, args = [], env = {}) {
   try {

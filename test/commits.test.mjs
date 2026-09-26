@@ -149,6 +149,43 @@ describe('changelogFromCommits', () => {
   })
 })
 
+describe('the Notes: trailer', () => {
+  it("reads the author's wording, and no-notes as an exclusion", () => {
+    assert.deepEqual(kit.notesTrailer('Some body.\n\nNotes: Keep the badge on top'), {
+      text: 'Keep the badge on top',
+      excluded: false,
+    })
+    assert.deepEqual(kit.notesTrailer('Notes: no-notes'), { text: null, excluded: true })
+    assert.deepEqual(kit.notesTrailer('notes: NO-NOTES'), { text: null, excluded: true })
+    assert.deepEqual(kit.notesTrailer('Nothing here.'), { text: null, excluded: false })
+    assert.deepEqual(kit.notesTrailer('Notes:'), { text: null, excluded: false })
+  })
+
+  it('replaces the subject in the changelog', () => {
+    const out = kit.changelogFromCommits([
+      c('abc1234', 'fix(ui): bump z-index of badge', 'Notes: The pull request badge stays on top'),
+    ])
+    assert.match(out, /- \*\*ui:\*\* The pull request badge stays on top/)
+    assert.ok(!out.includes('z-index'), out)
+  })
+
+  it('beats a BREAKING CHANGE footer, since it was written for this list', () => {
+    const out = kit.changelogFromCommits([
+      c('a', 'feat!: rework', 'BREAKING CHANGE: removeFoo() is gone\n\nNotes: Use bar() now'),
+    ])
+    assert.match(out, /- Use bar\(\) now/)
+  })
+
+  it('keeps a no-notes commit out of the changelog but not out of the bump', () => {
+    const commits = [c('a', 'feat: internal reshuffle', 'Notes: no-notes'), c('b', 'fix: typo')]
+    const out = kit.changelogFromCommits(commits)
+    assert.ok(!out.includes('internal reshuffle'), out)
+    assert.match(out, /typo/)
+    assert.equal(kit.inferBump(commits, '1.0.0').bump, 'minor')
+    assert.equal(kit.changelogFromCommits([commits[0]]), null)
+  })
+})
+
 describe('withoutRevertedCommits', () => {
   it('drops a reverted commit and the revert together', () => {
     const kept = kit.withoutRevertedCommits([

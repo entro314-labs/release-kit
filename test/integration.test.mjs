@@ -16,6 +16,7 @@ import {
   readFile,
   release,
   RELEASE_MJS,
+  stubAssistant,
   stubCalls,
   tagsOnRemote,
 } from './helpers/repo.mjs'
@@ -748,6 +749,35 @@ describe('choosing where notes come from', () => {
     const { status, stdout } = release(withChangelog(), ['1.1.0', '--notes', 'telepathy', '--yes'])
     assert.equal(status, 1)
     assert.match(stdout, /unknown notes source/)
+  })
+})
+
+describe('drafted release notes', () => {
+  const drafting = () => {
+    const repo = makeRepo({ config: { publish: null, steps: ['version', 'tag'] } })
+    execFileSync('git', ['tag', '-a', 'v1.0.0', '-m', 'base'], { cwd: repo.root })
+    const commit = (subject, body) => {
+      writeFileSync(join(repo.root, `${subject.replace(/\W/g, '')}.txt`), subject)
+      execFileSync('git', ['add', '-A'], { cwd: repo.root })
+      execFileSync('git', ['commit', '-qm', subject, ...(body ? ['-m', body] : [])], {
+        cwd: repo.root,
+      })
+    }
+    return { repo, commit, prompt: stubAssistant(repo) }
+  }
+
+  it("hands the model the author's Notes: wording and leaves no-notes commits out", () => {
+    const { repo, commit, prompt } = drafting()
+    commit('fix(ui): raise the badge z-index', 'Notes: The pull request badge stays on top')
+    commit('refactor: move the parser', 'Notes: no-notes')
+
+    const { status, stdout } = release(repo, ['1.1.0', '--assistant', 'claude', '--yes'], {
+      CLAUDE_DRAFT: '### Fixed\n\n- The pull request badge stays on top',
+    })
+    assert.equal(status, 0, stdout)
+    const sent = readFileSync(prompt, 'utf8')
+    assert.match(sent, /raise the badge z-index\n {2}Notes: The pull request badge stays on top/)
+    assert.ok(!sent.includes('move the parser'), 'the no-notes commit never reaches the model')
   })
 })
 

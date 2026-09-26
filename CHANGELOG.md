@@ -4,6 +4,13 @@ All notable changes to @entro314labs/release-kit.
 
 ## [Unreleased]
 
+### Added
+
+- **A `Notes:` commit trailer writes the release-notes entry.** `Notes: <text>` in a commit
+  body replaces the subject in commit-derived notes, and is passed to a drafting assistant
+  with the instruction to keep the author's wording. `Notes: no-notes` keeps a commit out of
+  the notes altogether, without changing the version bump it implies.
+
 ### Documentation
 
 - **The CI example released a tag that triggered nothing.** It ran release-kit with

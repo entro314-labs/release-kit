@@ -164,7 +164,8 @@ footer) is a major, a `feat:` is a minor, anything else is a patch. Below `1.0.0
 softened — a breaking change bumps the minor rather than jumping to `1.0.0`. A commit body
 containing `Release-As: 2.0.0` pins the version outright. It always prints what it inferred
 and why before doing anything. Set `"versioning"` to `always-patch`, `always-minor` or
-`always-major` to never infer.
+`always-major` to never infer. A `Notes:` line in a body sets what the release notes say
+about that commit — see [Release notes](#release-notes).
 
 | Target                               | From `1.2.3`                                     | From `2.0.0-beta.1` |
 | ------------------------------------ | ------------------------------------------------ | ------------------- |
@@ -298,6 +299,20 @@ Notes resolve in this order:
    new. All deterministic and needing nothing installed, so decent notes are the default
    rather than something that requires an assistant.
 4. Otherwise GitHub generates them from the commits since the previous tag.
+
+**A `Notes:` line in a commit body is the author's wording for the entry.** Commit-derived
+notes use it in place of the subject (and in place of a `BREAKING CHANGE:` footer), and an
+[assistant](#-assistant-optional) is handed it with the commit and told to keep it.
+`Notes: no-notes` leaves the commit out of the notes entirely — both kinds — for work that
+has to be a `fix:` or `feat:` for the version bump but is not news to anyone upgrading. The
+bump itself is unaffected: the trailer decides what is said about a change, not whether it
+counts.
+
+```text
+fix(ui): raise the badge z-index above the progress bar
+
+Notes: The pull request badge stays visible while a push is in progress
+```
 
 **Which tag the history is read from** is the highest version tag carrying the configured
 prefix that is reachable from `HEAD` — not the nearest tag. A repository carrying tags that

@@ -658,10 +658,28 @@ const CHANGELOG_SECTIONS = [
 ]
 
 /**
+ * The `Notes:` trailer in a commit body: the author's own wording for the release-notes
+ * entry, which beats anything derived from the subject. `Notes: no-notes` keeps the commit
+ * out of the notes altogether — a refactor that has to be a `fix:` for the version bump but
+ * that no reader upgrading needs to hear about. GitHub Desktop runs its notes this way.
+ *
+ * The version bump is not affected either way: the trailer decides what is said about a
+ * change, not whether it happened.
+ *
+ * @returns {{text: string|null, excluded: boolean}}
+ */
+function notesTrailer(body = '') {
+  const text = /^Notes:[ \t]*(\S.*)$/im.exec(body)?.[1]?.trim() ?? null
+  const excluded = !!text && /^no-notes$/i.test(text)
+  return { text: excluded ? null : text, excluded }
+}
+
+/**
  * Parse a commit into the parts a release cares about.
  *
  * @returns {{type: string, scope: string|null, breaking: boolean, subject: string,
- *   releaseAs: string|null} | null} null when the subject is not Conventional Commits
+ *   releaseAs: string|null, notes: string|null, noNotes: boolean} | null} null when the
+ *   subject is not Conventional Commits
  */
 function parseCommit(subject, body = '', hash = '') {
   // Conventional Commits does not restrict the type to letters — `i18n:` and `a11y:` are
@@ -680,6 +698,7 @@ function parseCommit(subject, body = '', hash = '') {
   // A BREAKING CHANGE footer usually explains the break far better than the subject does.
   const breakingNote =
     /^BREAKING[ -]CHANGE:\s*([\s\S]+?)(?=\n\n|$)/m.exec(body)?.[1]?.trim() ?? null
+  const trailer = notesTrailer(body)
   return {
     type: type.toLowerCase(),
     scope: scope ?? null,
@@ -689,6 +708,8 @@ function parseCommit(subject, body = '', hash = '') {
     releaseAs,
     closes: [...new Set(closes)],
     breakingNote,
+    notes: trailer.text,
+    noNotes: trailer.excluded,
   }
 }
 
@@ -727,7 +748,9 @@ function inferBump(commits, currentVersion, strategy = 'conventional') {
  * @returns {string | null} markdown body, or null when nothing visible changed
  */
 function changelogFromCommits(commits, links = null, hidden = [], contributors = []) {
-  const parsed = commits.map((c) => parseCommit(c.subject, c.body, c.hash)).filter(Boolean)
+  const parsed = commits
+    .map((c) => parseCommit(c.subject, c.body, c.hash))
+    .filter((c) => c && !c.noNotes)
   const lines = []
 
   /** One bullet: scope, text, a link to the commit, and any issues it closes. */
@@ -745,8 +768,9 @@ function changelogFromCommits(commits, links = null, hidden = [], contributors =
   const breaking = parsed.filter((c) => c.breaking)
   if (breaking.length) {
     lines.push('### ⚠ BREAKING CHANGES', '')
-    // The footer explains the break; the subject only says what changed.
-    for (const c of breaking) lines.push(bullet(c, c.breakingNote ?? c.subject))
+    // The footer explains the break; the subject only says what changed. A `Notes:`
+    // trailer beats both: it is the author's wording written for exactly this list.
+    for (const c of breaking) lines.push(bullet(c, c.notes ?? c.breakingNote ?? c.subject))
     lines.push('')
   }
 
@@ -768,7 +792,7 @@ function changelogFromCommits(commits, links = null, hidden = [], contributors =
     )
     if (!inSection.length) continue
     lines.push(`### ${section}`, '')
-    for (const c of inSection) lines.push(bullet(c, c.subject))
+    for (const c of inSection) lines.push(bullet(c, c.notes ?? c.subject))
     lines.push('')
   }
 
@@ -780,7 +804,7 @@ function changelogFromCommits(commits, links = null, hidden = [], contributors =
   )
   if (other.length) {
     lines.push('### Other Changes', '')
-    for (const c of other) lines.push(bullet(c, c.subject))
+    for (const c of other) lines.push(bullet(c, c.notes ?? c.subject))
     lines.push('')
   }
 
@@ -1072,7 +1096,11 @@ function linkCitedCommits(notes, commits, links) {
  * @returns {string | null} markdown body (no version heading), or null
  */
 function draftReleaseNotes(version, commits, lastTag, links) {
-  if (!commits.length) return null
+  // `Notes: no-notes` is the author saying this commit is not news; the model never sees it.
+  const listed = commits
+    .map((c) => ({ ...c, trailer: notesTrailer(c.body) }))
+    .filter((c) => !c.trailer.excluded)
+  if (!listed.length) return null
 
   const prompt = [
     `Write release notes for version ${version}.`,
@@ -1085,19 +1113,24 @@ function draftReleaseNotes(version, commits, lastTag, links) {
     '  `(abc1234, def5678)` when merged. Copy them exactly from the list below and invent',
     '  nothing — a hash that is not in the list will be removed.',
     '- Omit internal chores: CI, linting, formatting, dependency bumps, version bumps.',
+    "- A commit with a `Notes:` line carries its author's wording for the entry: use that",
+    '  text as written, changing it only to fit the heading or to merge it with related work.',
     '- Write for someone upgrading: say what changed for them, not which files moved.',
     '- Plain, factual language. No hype, no emoji, no concluding summary.',
     '- Output only the markdown body: no version heading, no code fences, no attribution.',
     '- Do NOT explain your reasoning or add any commentary before or after the notes.',
     '',
     `Commits since ${lastTag ?? 'the start of the project'}:`,
-    ...commits.map((c) => `- ${(c.hash ?? '').slice(0, 7)} ${c.subject}`),
+    ...listed.flatMap((c) => [
+      `- ${(c.hash ?? '').slice(0, 7)} ${c.subject}`,
+      ...(c.trailer.text ? [`  Notes: ${c.trailer.text}`] : []),
+    ]),
   ].join('\n')
 
   const drafted = runAssistant(prompt)
   if (!drafted) return null
   const cleaned = cleanNotes(drafted)
-  return cleaned ? linkCitedCommits(cleaned, commits, links) : null
+  return cleaned ? linkCitedCommits(cleaned, listed, links) : null
 }
 
 /** One-line rendering of an argv, so a multi-line arg (release notes) stays readable. */
