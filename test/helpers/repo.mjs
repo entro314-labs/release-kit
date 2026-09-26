@@ -138,6 +138,8 @@ case "$1" in
       echo "error: failed to verify package tarball" >&2
       exit 101
     fi
+    # A real verify build streams every "Compiling …" line; CARGO_PACKAGE_NOISE bytes of it.
+    [ -n "$CARGO_PACKAGE_NOISE" ] && head -c "$CARGO_PACKAGE_NOISE" /dev/zero | tr '\\0' 'x' >&2
     mkdir -p "$target/package"
     head -c "\${CARGO_CRATE_BYTES:-2048}" /dev/zero > "$target/package/demo-1.0.0.crate"
     exit 0 ;;

@@ -504,6 +504,17 @@ describe('one repository, two ecosystems', () => {
     assert.deepEqual(tagsOnRemote(repo), [])
   })
 
+  it('is not undone by a verify build that prints a lot', () => {
+    // Every "Compiling …" line of a real crate's build goes to stderr. Past Node's default
+    // 1 MiB output buffer that threw, and read as "cargo package failed".
+    const repo = makeRepo(plugin())
+    const { status, stdout } = release(repo, ['minor', '--yes'], {
+      CARGO_REGISTRY_TOKEN: 'test-token',
+      CARGO_PACKAGE_NOISE: String(2 * 1024 * 1024),
+    })
+    assert.equal(status, 0, stdout.slice(-2000))
+  })
+
   it('does not package a crate that is already published', () => {
     const repo = makeRepo(plugin())
     release(repo, ['minor', '--yes'], { CARGO_REGISTRY_TOKEN: 'test-token', CARGO_PUBLISHED: '0' })

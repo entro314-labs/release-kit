@@ -3473,7 +3473,8 @@ function checkCratePackage(target) {
   }
   const started = Date.now()
   try {
-    execFileSync('cargo', args, { stdio: 'pipe', encoding: 'utf8' })
+    // A verify build prints every crate it compiles; Node's 1 MiB default would overflow.
+    execFileSync('cargo', args, { stdio: 'pipe', encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 })
   } catch (err) {
     const tail = `${err.stdout ?? ''}${err.stderr ?? ''}`.trim().split('\n').slice(-12).join('\n')
     fail(`\`cargo ${args.join(' ')}\` failed — \`${target.command}\` would too:\n${indent(tail)}`)
