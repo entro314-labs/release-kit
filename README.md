@@ -418,8 +418,12 @@ runs `cargo package` with the same arguments first — `-p`, `--workspace`,
 `--manifest-path`, `--features` and `--no-verify` carry over, so a workspace packages each
 crate it will publish — and refuses on a failure or an oversized `.crate`.
 
-- It packages the tree before the version bump. The version is the only difference from
-  what will be uploaded, and it changes neither the file list nor the size.
+- It packages the tree before the version bump. That is enough because the bump writes
+  the version into `Cargo.toml` _and_ `Cargo.lock` together, so the tree `cargo publish`
+  sees differs only in the version number, which changes neither the file list nor the
+  size. A `Cargo.lock` left on the old version would dirty the tree after the push instead:
+  it is detected beside a `Cargo.toml` version source, and a configured `versionFiles` that
+  writes `Cargo.toml` without it is refused while a `cargo publish` is going to run.
 - `--locked` is added when the repository has a `Cargo.lock`; `--allow-dirty` only when the
   tree is dirty (which preflight reports on its own, or the `commit` step is about to fix).
 - Like `cargo publish`, it compiles the crate, so preflight takes a build longer. Put
@@ -648,6 +652,12 @@ too, and are refreshed by the tool that owns them rather than rewritten by patte
 version sits in more than one place and the formats change shape between tool versions.
 Each is scoped to its manifest, so a `uv.lock` for a component this release is not
 versioning stays out of the release commit, and a missing tool warns rather than aborting.
+
+A `Cargo.lock` beside a detected `Cargo.toml` is kept in step without being listed, whether
+`Cargo.toml` is the version source (a plain crate) or a companion manifest. A configured
+`versionFiles` is never extended, so list the lockfile there yourself; when a `cargo publish`
+is going to run and a written `Cargo.toml` would leave its `Cargo.lock` on the old version,
+preflight refuses rather than letting `cargo publish` fail on the dirty tree after the push.
 `pnpm-lock.yaml` records no root version, so it never goes stale.
 
 ### Marking the line instead of writing a pattern

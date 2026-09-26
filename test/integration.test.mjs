@@ -575,6 +575,54 @@ describe('one repository, two ecosystems', () => {
     )
   })
 
+  it('keeps Cargo.lock in step when Cargo.toml is the version source', () => {
+    // A plain crate: no package.json, so Cargo.toml is the primary version file rather than
+    // a companion. The lockfile was only ever added for the companion case, so it stayed at
+    // the old version and `cargo publish` refused the now-dirty tree — after the push.
+    const lock = (v) =>
+      '[[package]]\nname = "adler2"\nversion = "2.0.1"\n\n' +
+      `[[package]]\nname = "demo-crate"\nversion = "${v}"\n`
+    const repo = makeRepo({
+      manifest: false,
+      files: {
+        'Cargo.toml': '[package]\nname = "demo-crate"\nversion = "1.0.0"\n',
+        'Cargo.lock': lock('1.0.0'),
+      },
+    })
+    const { status, stdout } = release(repo, ['minor', '--yes', '--skip', 'release'], {
+      CARGO_REGISTRY_TOKEN: 'test-token',
+    })
+    assert.equal(status, 0, stdout)
+    assert.match(stdout, /also versioned in Cargo\.lock \(detected\)/)
+    assert.equal(readFile(repo, 'Cargo.lock'), lock('1.1.0'))
+    const dirty = execFileSync('git', ['status', '--porcelain'], {
+      cwd: repo.root,
+      encoding: 'utf8',
+    })
+    assert.equal(dirty, '', 'the lockfile rode in the release commit')
+  })
+
+  it('refuses a cargo publish whose Cargo.lock the configured files leave stale', () => {
+    // Configured files are the whole answer and are not extended — so a crate published
+    // with its lockfile left out would fail at `cargo publish` on a dirty tree, after the
+    // push. That is caught before anything mutates instead.
+    const repo = makeRepo({
+      manifest: false,
+      config: { versionFile: 'Cargo.toml', steps: ['version', 'tag', 'push', 'publish'] },
+      files: {
+        'Cargo.toml': '[package]\nname = "demo-crate"\nversion = "1.0.0"\n',
+        'Cargo.lock': '[[package]]\nname = "demo-crate"\nversion = "1.0.0"\n',
+      },
+    })
+    const { status, stdout } = release(repo, ['minor', '--yes'], {
+      CARGO_REGISTRY_TOKEN: 'test-token',
+    })
+    assert.equal(status, 1, stdout)
+    assert.match(stdout, /Cargo\.lock records demo-crate 1\.0\.0/)
+    assert.match(stdout, /Add "Cargo\.lock" to versionFiles/)
+    assert.deepEqual(tagsOnRemote(repo), [])
+  })
+
   it('does not extend a versionFiles the project wrote itself', () => {
     const repo = makeRepo({
       config: { versionFiles: ['VERSION'], publish: null, steps: ['version', 'tag', 'push'] },

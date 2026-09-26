@@ -2307,6 +2307,10 @@ const ECOSYSTEM_MANIFESTS = ['package.json', 'pyproject.toml', 'Cargo.toml']
  */
 function detectCompanionFiles(primaryPath, primaryVersion) {
   const companions = []
+  // The lockfile pins the crate's own version, so a bump leaves it stale — whether
+  // Cargo.toml is the version source or a manifest kept in step with one. A plain crate was
+  // the case missed: `cargo publish` then refused the dirty lockfile, after the push.
+  if (primaryPath === 'Cargo.toml' && existsSync('Cargo.lock')) companions.push('Cargo.lock')
   for (const candidate of ECOSYSTEM_MANIFESTS) {
     if (candidate === primaryPath || !existsSync(candidate)) continue
     const found = readVersionFrom({ path: candidate })
@@ -3034,6 +3038,31 @@ if (bumping) {
           'x-release-kit-version marker.\n       Writing the version into it would replace ' +
           'everything else in it. Mark the line that holds the version, or give the entry ' +
           'a "pattern".',
+      )
+    }
+  }
+}
+
+// A configured list is never extended, so a Cargo.toml written without the Cargo.lock beside
+// it leaves the lockfile on the old version. Publishing is where that breaks: `cargo publish`
+// refuses a dirty tree, after the tag and the push. Say so before either.
+if (bumping && publishTargets.some((target) => target.cli === 'cargo')) {
+  const written = new Set(versionTargets.map((source) => source.path))
+  for (const source of versionTargets) {
+    if (basename(source.path) !== 'Cargo.toml') continue
+    const lockPath = join(dirname(source.path), 'Cargo.lock')
+    if (written.has(lockPath) || !existsSync(lockPath)) continue
+    let recorded = null
+    try {
+      recorded = readVersionFrom({ path: lockPath })
+    } catch {
+      // A lockfile with nothing beside it to scope by: not this check's question.
+    }
+    if (recorded && recorded !== version) {
+      fail(
+        `${lockPath} records ${readNameFrom(source) ?? 'the crate'} ${recorded}, and nothing ` +
+          `will bump it — \`cargo publish\` would refuse the stale lockfile after the push.\n` +
+          `       Add "${lockPath}" to versionFiles in release.config.json.`,
       )
     }
   }

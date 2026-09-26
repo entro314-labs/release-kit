@@ -31,6 +31,14 @@ All notable changes to @entro314labs/release-kit.
 
 ### Fixed
 
+- **A plain Rust crate's `Cargo.lock` was left on the old version.** With no `package.json`,
+  `Cargo.toml` is the version source rather than a companion manifest, and the lockfile was
+  only ever kept in step for a companion. The release commit left `Cargo.lock` stale and
+  `cargo publish` refused the dirty tree — after the tag and the push. It is now detected
+  alongside a primary `Cargo.toml` too; and where a configured `versionFiles` writes a
+  `Cargo.toml` without its `Cargo.lock`, preflight refuses while a `cargo publish` is going
+  to run instead of failing after the push.
+
 - **A stable release silently dropped wording edited into its candidates' sections.** Its
   notes are generated from every commit since the last stable tag, so text edited into a
   `[2.0.0-rc.1]` section never reached the `2.0.0` tag or release, and nothing said so.
