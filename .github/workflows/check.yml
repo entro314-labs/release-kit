@@ -19,6 +19,11 @@ jobs:
         with:
           fetch-depth: 0 # the integration tests build real repositories with real history
       - uses: pnpm/action-setup@v6
+        with:
+          # v6 no longer guesses: without a version here or a `packageManager` field it
+          # fails before install. Named here rather than in package.json, where pnpm 12
+          # would also pin its own binaries into the lockfile.
+          version: 12.7.0
       - uses: actions/setup-node@v7
         with:
           node-version: 24
