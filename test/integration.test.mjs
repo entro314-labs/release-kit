@@ -1094,6 +1094,11 @@ describe('drafted entries the assistant marked [???]', () => {
     })
     assert.equal(status, 0, stdout)
     assert.match(readFile(repo, 'CHANGELOG.md'), /gives up after five tries/)
+    assert.match(
+      readFile(repo, 'CHANGELOG.md'),
+      /## \[Unreleased\]\n\n## \[1\.0\.1\]/,
+      'the draft is filed below the empty [Unreleased]',
+    )
   })
 
   it('stops after the working-tree commit when the notes were drafted after the prompt', () => {

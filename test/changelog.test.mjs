@@ -132,6 +132,34 @@ describe('section placement', () => {
     assert.equal(kit.changelogSection(out, '0.3.0'), '- new work.')
   })
 
+  it('files a drafted release below an empty [Unreleased], not above it', () => {
+    // A changelog with no version heading yet — the first release, or one headed by dates —
+    // put the drafted section at the first heading of any kind, which was [Unreleased].
+    const headings = (doc) => doc.split('\n').filter((l) => l.startsWith('## '))
+    assert.deepEqual(
+      headings(
+        kit.insertChangelogSection(
+          '# Changelog\n\n## [Unreleased]\n',
+          '1.0.1',
+          '2026-09-26',
+          '- x.',
+        ),
+      ),
+      ['## [Unreleased]', '## [1.0.1] - 2026-09-26'],
+    )
+    assert.deepEqual(
+      headings(
+        kit.insertChangelogSection(
+          '# Changelog\n\n## [Unreleased]\n\n## [2026-09-02]\n\n- today.\n',
+          '0.3.0',
+          '2026-09-26',
+          '- x.',
+        ),
+      ),
+      ['## [Unreleased]', '## [0.3.0] - 2026-09-26', '## [2026-09-02]'],
+    )
+  })
+
   it('lifts a misplaced [Unreleased] to the top instead of rolling in place', () => {
     const broken =
       '# Changelog\n\n## [2.3.3]\n\n- old.\n\n## [Unreleased]\n\n- new work.\n\n## [2.4.0]\n\n- newer.\n'

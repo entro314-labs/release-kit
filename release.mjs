@@ -1519,9 +1519,13 @@ function insertChangelogSection(text, version, date, body) {
   }
   // Falling out of the loop means every version section is newer, so the release belongs
   // at the foot. With nothing to compare against it belongs at the head instead: appending
-  // to a date-headed changelog would file the release below its oldest entry.
-  if (!comparable && offsets.length) {
-    return `${text.slice(0, offsets[0])}${entry}\n${text.slice(offsets[0])}`
+  // to a date-headed changelog would file the release below its oldest entry. The head is
+  // below [Unreleased], though, which stays the first section — a first release drafted into
+  // a changelog holding only an empty [Unreleased] used to land above it.
+  if (!comparable) {
+    const unreleased = /^## \[?Unreleased\]?/i
+    const first = offsets.find((offset) => !unreleased.test(text.slice(offset)))
+    if (first !== undefined) return `${text.slice(0, first)}${entry}\n${text.slice(first)}`
   }
   const trimmed = text.trimEnd()
   return `${trimmed}\n\n${entry}`

@@ -39,6 +39,11 @@ All notable changes to @entro314labs/release-kit.
   `Cargo.toml` without its `Cargo.lock`, preflight refuses while a `cargo publish` is going
   to run instead of failing after the push.
 
+- **A drafted section landed above an empty `[Unreleased]`.** In a changelog with no version
+  heading yet — a first release, or one headed by dates — the drafted section went in at the
+  first heading of any kind, which was `[Unreleased]`. It is now filed below it, so
+  `[Unreleased]` stays the top section.
+
 - **A stable release silently dropped wording edited into its candidates' sections.** Its
   notes are generated from every commit since the last stable tag, so text edited into a
   `[2.0.0-rc.1]` section never reached the `2.0.0` tag or release, and nothing said so.
