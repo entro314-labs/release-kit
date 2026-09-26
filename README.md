@@ -381,6 +381,8 @@ rather than stopping at the first problem.
 - `gh` is installed and authenticated
 - Commit and tag signing can actually sign, and the key is one GitHub will accept
 - The publishing CLI is authenticated, and the version is not already published
+- A crate that `cargo publish` will upload packages cleanly (`cargo package`) and fits
+  crates.io's 10 MiB upload limit — see [below](#crates-are-packaged-in-preflight)
 - The previous release actually reached the registry — one that did not is either finished
   by this run or absorbed into it _(warning)_
 - Configured release assets exist
@@ -401,6 +403,26 @@ rather than stopping at the first problem.
 
 Under `--dry-run` the failures are reported and then the remaining steps are shown anyway,
 so you can see the whole plan without fixing the blockers first.
+
+### Crates are packaged in preflight
+
+`cargo publish` packages and verifies the crate as its first act, so a file your
+`include`/`exclude` left out, metadata crates.io refuses, a crate that does not build from
+its own archive, or an archive over crates.io's 10 MiB limit used to surface only after the
+release was tagged and pushed. When a `cargo publish` command is going to run, preflight
+runs `cargo package` with the same arguments first — `-p`, `--workspace`,
+`--manifest-path`, `--features` and `--no-verify` carry over, so a workspace packages each
+crate it will publish — and refuses on a failure or an oversized `.crate`.
+
+- It packages the tree before the version bump. The version is the only difference from
+  what will be uploaded, and it changes neither the file list nor the size.
+- `--locked` is added when the repository has a `Cargo.lock`; `--allow-dirty` only when the
+  tree is dirty (which preflight reports on its own, or the `commit` step is about to fix).
+- Like `cargo publish`, it compiles the crate, so preflight takes a build longer. Put
+  `--no-verify` on the publish command if you want neither to compile.
+- A publish command that is not a plain `cargo publish …` — a pipeline, quoting, an
+  environment prefix — is left alone, since what it uploads cannot be read off it.
+- The 10 MiB is crates.io's default; it can raise the limit for a single crate on request.
 
 ### Requiring a green HEAD
 

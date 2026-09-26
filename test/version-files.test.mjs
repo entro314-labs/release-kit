@@ -236,3 +236,54 @@ describe('the version-date marker', () => {
     assert.match(readFileSync(path, 'utf8'), /<release version="1\.4\.0" date="2026-08-21"\/>/)
   })
 })
+
+describe('cargoPackageArgs', () => {
+  it('packages what the publish command would upload', () => {
+    assert.deepEqual(kit.cargoPackageArgs('cargo publish'), ['package'])
+    assert.deepEqual(kit.cargoPackageArgs('cargo publish -p core --features full'), [
+      'package',
+      '-p',
+      'core',
+      '--features',
+      'full',
+    ])
+    assert.deepEqual(kit.cargoPackageArgs('cargo publish --workspace --no-verify'), [
+      'package',
+      '--workspace',
+      '--no-verify',
+    ])
+  })
+
+  it('drops the flags cargo package does not take', () => {
+    assert.deepEqual(kit.cargoPackageArgs('cargo publish --dry-run --token abc -n'), ['package'])
+    assert.deepEqual(kit.cargoPackageArgs('cargo publish --token=abc'), ['package'])
+  })
+
+  it('adds --locked only with a lockfile, and --allow-dirty only on a dirty tree', () => {
+    assert.deepEqual(kit.cargoPackageArgs('cargo publish', { lockfile: true, dirty: true }), [
+      'package',
+      '--locked',
+      '--allow-dirty',
+    ])
+    assert.deepEqual(kit.cargoPackageArgs('cargo publish --locked', { lockfile: true }), [
+      'package',
+      '--locked',
+    ])
+  })
+
+  it('does not take apart a command it cannot read', () => {
+    for (const command of [
+      'cargo publish && echo done',
+      'CARGO_REGISTRY_TOKEN=x cargo publish',
+      "cargo publish --features 'a b'",
+      'cargo package',
+      'cargo-release publish',
+    ]) {
+      assert.equal(kit.cargoPackageArgs(command), null, command)
+    }
+  })
+
+  it('knows the crates.io limit is 10 MiB', () => {
+    assert.equal(kit.CRATES_IO_MAX_BYTES, 10_485_760)
+  })
+})

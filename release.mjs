@@ -42,6 +42,7 @@ import {
   mkdtempSync,
   readdirSync,
   readFileSync,
+  statSync,
   writeFileSync,
 } from 'node:fs'
 import { homedir, tmpdir } from 'node:os'
@@ -1676,6 +1677,53 @@ function expandPaths(pattern) {
     current = next
   }
   return current
+}
+
+/**
+ * crates.io's default ceiling on an uploaded `.crate`, in bytes: `10 * 1024 * 1024` in
+ * crates.io's src/config/publish_limits.rs. The registry can raise it for one crate on
+ * request, but a crate over it is otherwise refused at upload — after the tag and the push.
+ */
+const CRATES_IO_MAX_BYTES = 10 * 1024 * 1024
+
+/**
+ * The `cargo package` argv that builds exactly what a `cargo publish` command would upload,
+ * so preflight can find a missing file or an oversized archive before anything is tagged.
+ *
+ * Deriving it from the publish command rather than guessing keeps the selection the same:
+ * `-p`, `--workspace`, `--manifest-path`, `--features` and `--no-verify` mean the same thing
+ * to both subcommands, so a workspace packages each crate it will publish. Only the flags
+ * `cargo package` does not take are dropped (`--dry-run`, `--token`).
+ *
+ * `--locked` is added when the repository has a `Cargo.lock`: publishing verifies against
+ * it, and a stale one is a failure better found now. Without a lockfile it would refuse
+ * outright, and plenty of libraries do not commit one. `--allow-dirty` is added only when
+ * the tree is dirty — preflight reports that on its own, or the commit step is about to
+ * make it clean — so the package check still says something useful.
+ *
+ * A command that is not a plain `cargo publish …` (a pipeline, quoting, an env prefix) is
+ * not taken apart: there is no reliable way to know what it uploads.
+ *
+ * @returns {string[] | null} args for `cargo`, or null when it cannot be derived
+ */
+function cargoPackageArgs(command, { dirty = false, lockfile = false } = {}) {
+  if (!/^cargo\s+publish(?:\s|$)/.test(command.trim()) || /[;&|<>`$()'"\\]/.test(command)) {
+    return null
+  }
+  const words = command.trim().split(/\s+/).slice(2)
+  const args = ['package']
+  for (let i = 0; i < words.length; i += 1) {
+    const word = words[i]
+    if (word === '--dry-run' || word === '-n' || word.startsWith('--token=')) continue
+    if (word === '--token') {
+      i += 1
+      continue
+    }
+    args.push(word)
+  }
+  if (lockfile && !args.includes('--locked')) args.push('--locked')
+  if (dirty && !args.includes('--allow-dirty')) args.push('--allow-dirty')
+  return args
 }
 
 /**
@@ -3353,6 +3401,74 @@ function checkCredentials({ cli, registry, command }) {
   }
 }
 
+/**
+ * Package what `cargo publish` will upload, before the tag and the push rather than after.
+ *
+ * `cargo publish` packages and verifies as its first act, so a file left out by `include`
+ * or `exclude`, a manifest crates.io rejects, a crate that does not build from its own
+ * archive, or one over the upload limit is discovered only once the release is tagged and
+ * pushed. This runs the same packaging now. It builds the crate, as publishing does, so it
+ * costs a compile.
+ *
+ * It packages the tree as it is — the version is not bumped yet. The version number is the
+ * one thing that differs from what will be uploaded, and it changes neither the file list,
+ * the metadata, nor the size.
+ */
+function checkCratePackage(target) {
+  const args = cargoPackageArgs(target.command, {
+    dirty: !!dirty,
+    lockfile: existsSync('Cargo.lock'),
+  })
+  if (!args) {
+    note(`cargo: \`${target.command}\` is not a plain cargo publish — not packaging it first`)
+    return
+  }
+  const started = Date.now()
+  try {
+    execFileSync('cargo', args, { stdio: 'pipe', encoding: 'utf8' })
+  } catch (err) {
+    const tail = `${err.stdout ?? ''}${err.stderr ?? ''}`.trim().split('\n').slice(-12).join('\n')
+    fail(`\`cargo ${args.join(' ')}\` failed — \`${target.command}\` would too:\n${indent(tail)}`)
+    return
+  }
+  const metadata = tryRead('cargo', ['metadata', '--no-deps', '--format-version', '1'])
+  let targetDir = null
+  try {
+    targetDir = metadata ? JSON.parse(metadata).target_directory : null
+  } catch {
+    targetDir = null
+  }
+  const packageDir = targetDir ? join(targetDir, 'package') : null
+  // Only archives this run wrote: target/package keeps every earlier version too.
+  const crates =
+    packageDir && existsSync(packageDir)
+      ? readdirSync(packageDir)
+          .filter((name) => name.endsWith('.crate'))
+          .map((name) => {
+            const { size, mtimeMs } = statSync(join(packageDir, name))
+            return { name, size, mtimeMs }
+          })
+          .filter(({ mtimeMs }) => mtimeMs >= started - 1000)
+      : []
+  if (!crates.length) {
+    warn('cargo package passed, but no .crate it wrote was found to check against the size limit')
+    return
+  }
+  const limitMb = (CRATES_IO_MAX_BYTES / 1024 / 1024).toFixed(0)
+  for (const { name, size } of crates) {
+    const mb = (size / 1024 / 1024).toFixed(1)
+    if (size > CRATES_IO_MAX_BYTES) {
+      fail(
+        `${name} is ${mb} MiB, over crates.io's ${limitMb} MiB upload limit.\n` +
+          '       Trim it with `include`/`exclude` in Cargo.toml (`cargo package --list` shows ' +
+          'what goes in), or ask crates.io to raise the limit for this crate.',
+      )
+    } else {
+      ok(`cargo package: ${name} (${mb} MiB)`)
+    }
+  }
+}
+
 /** Commands whose version is already on the registry, so the publish step skips them. */
 const alreadyPublished = new Set()
 if (!publishTargets.length) {
@@ -3376,6 +3492,7 @@ if (!publishTargets.length) {
       alreadyPublished.add(target.command)
       note(`${target.name}@${version} is already published — will skip \`${target.command}\``)
     }
+    if (target.cli === 'cargo' && !alreadyPublished.has(target.command)) checkCratePackage(target)
   }
 }
 

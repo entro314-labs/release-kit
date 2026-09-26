@@ -127,8 +127,20 @@ exit 0
     join(bin, 'cargo'),
     `#!/bin/sh
 echo "cargo $*" >> "${calls}"
+# \`cargo package\` writes an archive of CARGO_CRATE_BYTES where \`cargo metadata\` says the
+# target directory is — outside the repository, so the tree stays clean.
+target="\${CARGO_TARGET_DIR:-${calls}-target}"
 case "$1" in
   info) exit \${CARGO_PUBLISHED:-101} ;;
+  package)
+    if [ -n "$CARGO_PACKAGE_FAILS" ]; then
+      echo "error: failed to verify package tarball" >&2
+      exit 101
+    fi
+    mkdir -p "$target/package"
+    head -c "\${CARGO_CRATE_BYTES:-2048}" /dev/zero > "$target/package/demo-1.0.0.crate"
+    exit 0 ;;
+  metadata) printf '{"target_directory":"%s"}' "$target"; exit 0 ;;
 esac
 exit 0
 `,

@@ -22,6 +22,13 @@ All notable changes to @entro314labs/release-kit.
   named, a running one is waited for, and a commit no check has looked at is refused. When
   release-kit runs inside Actions, the workflow run it belongs to is left out of the count.
 
+- **A crate is packaged in preflight.** `cargo publish` packages and verifies as its first
+  act, so a missing file, rejected metadata, a crate that does not build from its archive
+  or one over crates.io's 10 MiB limit failed after the tag and the push. Preflight now runs
+  `cargo package` with the publish command's own arguments (so a workspace packages every
+  crate it publishes), plus `--locked` when there is a `Cargo.lock`, and refuses on a
+  failure or an oversized `.crate`. It costs a compile, as publishing does.
+
 ### Changed
 
 - **Drafted notes keep updates to components that ship inside the product.** The assistant

@@ -38,6 +38,7 @@ export {
   cleanDraft, cleanNotes, linkCitedCommits, uncertainEntries, withoutUnsureMarkers, CONVENTIONAL_RE, CHANGELOG_SECTIONS, HOSTS,
   lintSubjects, CHANGELOG_TYPES, KNOWN_TYPES, WRITE_TYPES,
   readVersionFrom, writeVersionInto, versionSource, patternFor, expandPaths, workspaceCrates,
+  cargoPackageArgs, CRATES_IO_MAX_BYTES,
   applyVersionMarkers, hasVersionMarkers, versionMode,
   inventedVersions, normalizeRepoUrl, fallbackCommitMessage,
 }`,

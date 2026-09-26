@@ -457,6 +457,52 @@ describe('one repository, two ecosystems', () => {
     assert.deepEqual(tagsOnRemote(repo), [], 'nothing mutated')
   })
 
+  it('packages the crate before tagging, as publishing would', () => {
+    const repo = makeRepo(plugin())
+    const { status, stdout } = release(repo, ['minor', '--yes'], {
+      CARGO_REGISTRY_TOKEN: 'test-token',
+    })
+    assert.equal(status, 0, stdout)
+    assert.match(stdout, /ok {3}cargo package: demo-1\.0\.0\.crate \(0\.0 MiB\)/)
+    const calls = stubCalls(repo)
+    assert.ok(calls.includes('cargo package --locked'), calls.join(' | '))
+    assert.ok(
+      calls.indexOf('cargo package --locked') < calls.indexOf('cargo publish'),
+      'packaged in preflight, long before the publish',
+    )
+  })
+
+  it('refuses a crate over the crates.io upload limit before anything is tagged', () => {
+    // crates.io rejects it at upload — which used to be after the tag and the push.
+    const repo = makeRepo(plugin())
+    const { status, stdout } = release(repo, ['minor', '--yes'], {
+      CARGO_REGISTRY_TOKEN: 'test-token',
+      CARGO_CRATE_BYTES: String(10 * 1024 * 1024 + 1),
+    })
+    assert.equal(status, 1, stdout)
+    assert.match(stdout, /demo-1\.0\.0\.crate is 10\.0 MiB, over crates\.io's 10 MiB upload limit/)
+    assert.deepEqual(tagsOnRemote(repo), [])
+    assert.ok(!stubCalls(repo).some((c) => / publish/.test(c)), 'nothing was published')
+  })
+
+  it("refuses a crate that does not package, with cargo's own error", () => {
+    const repo = makeRepo(plugin())
+    const { status, stdout } = release(repo, ['minor', '--yes'], {
+      CARGO_REGISTRY_TOKEN: 'test-token',
+      CARGO_PACKAGE_FAILS: '1',
+    })
+    assert.equal(status, 1, stdout)
+    assert.match(stdout, /`cargo package --locked` failed — `cargo publish` would too/)
+    assert.match(stdout, /failed to verify package tarball/)
+    assert.deepEqual(tagsOnRemote(repo), [])
+  })
+
+  it('does not package a crate that is already published', () => {
+    const repo = makeRepo(plugin())
+    release(repo, ['minor', '--yes'], { CARGO_REGISTRY_TOKEN: 'test-token', CARGO_PUBLISHED: '0' })
+    assert.ok(!stubCalls(repo).some((c) => c.startsWith('cargo package')))
+  })
+
   it('leaves a manifest on its own version line alone, and says why', () => {
     // Different versions mean two independent release lines. Syncing them would silently
     // jump the crate five minor versions; refusing is the only safe reading.
