@@ -19,6 +19,11 @@ jobs:
       matrix:
         # Windows is in the matrix because it is untested, not because it is known to work.
         os: [ubuntu-latest, macos-latest, windows-latest]
+    # Known not to work yet: the integration fixtures put POSIX `sh` stubs for gh/npm/cargo
+    # on PATH, which Windows cannot execute, so roughly half the suite fails there. The leg
+    # still runs so the count stays visible, but it does not turn the check red until the
+    # fixtures grow Windows shims.
+    continue-on-error: ${{ matrix.os == 'windows-latest' }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
