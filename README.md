@@ -384,6 +384,8 @@ rather than stopping at the first problem.
 - The previous release actually reached the registry — one that did not is either finished
   by this run or absorbed into it _(warning)_
 - Configured release assets exist
+- With `"requireGreen": true`, HEAD is on the remote and GitHub reports it green — see
+  [below](#requiring-a-green-head)
 - The configured `verify` command passes — the project's own gate (tests, build) runs
   before anything mutates, instead of a `prepublishOnly` hook failing after the commit,
   tag and push
@@ -399,6 +401,29 @@ rather than stopping at the first problem.
 
 Under `--dry-run` the failures are reported and then the remaining steps are shown anyway,
 so you can see the whole plan without fixing the blockers first.
+
+### Requiring a green HEAD
+
+`verify` runs your gate locally. `"requireGreen": true` asks GitHub instead, before anything
+is bumped: the release is refused unless the commit being released is on the remote (a
+local commit has no checks, so HEAD must not be ahead of `origin/<branch>`) and its checks
+passed. A dirty tree the `commit` step would fold in is refused too — CI never saw it.
+
+- **Failed** — any check run concluding `failure`, `cancelled`, `timed_out`,
+  `action_required` or `stale`, or a commit status of `failure` or `error`. The failing
+  checks are named.
+- **Not finished** — any check run still queued or in progress, or a status still
+  `pending`: wait for it and re-run.
+- **Nothing checked** — no check run or status reporting `success`. Zero checks, or only
+  skipped ones, means nothing verified the commit, which is not the same as green.
+
+Both of GitHub's systems are read — check runs (`commits/{sha}/check-runs`, what Actions
+and GitHub Apps report) and commit statuses (`commits/{sha}/status`, what external CI such
+as Buildkite or Jenkins still posts) — because either one alone can call a commit green
+while the other has it red. It needs `gh`, authenticated, even with the `release` step off.
+Run inside GitHub Actions, the check runs of the current workflow run are ignored: the job
+doing the release is itself an unfinished check on that commit. Ordering against other jobs
+in the same workflow is what `needs:` is for.
 
 ## ♻️ Recovering from a failed run
 
@@ -714,6 +739,7 @@ rather than being silently ignored.
 | `publish`       | detected               | Publish command, or an array of them; `null` publishes nothing          |
 | `versioning`    | `"conventional"`       | How `auto` infers; or `always-patch` / `-minor` / `-major`              |
 | `verify`        | `null`                 | Command run during preflight; non-zero aborts before anything mutates   |
+| `requireGreen`  | `false`                | Refuse a HEAD that is not pushed and green on GitHub                    |
 | `hooks`         | `{}`                   | Commands run between the steps — see [Hooks](#-hooks)                   |
 | `assistant`     | `null`                 | Drafting CLI: a name, `"auto"`, or `{ tool, model, effort }`            |
 | `commitMessage` | `"chore(release): %t"` | Release commit subject                                                  |
@@ -805,6 +831,9 @@ Two upstream habits make commit-derived notes trustworthy, and neither is releas
         - run: git switch -C main
         - run: npx @entro314labs/release-kit@2.9.4 auto --yes
   ```
+
+  [`requireGreen`](#requiring-a-green-head) is the same gate inside release-kit, for a
+  release run by hand or from a workflow that does not know which checks passed.
 
   `branches: [main]` narrows the trigger to runs on `main`, but a pull request from a fork
   whose branch is named `main` matches it too; `event == 'push'` is what rules pull request

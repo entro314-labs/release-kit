@@ -16,6 +16,12 @@ All notable changes to @entro314labs/release-kit.
   the marker on a `y`; under `--yes` or without a terminal, preflight refuses before
   anything mutates, since nobody has reviewed them. Only assistant drafts are checked.
 
+- **`requireGreen` refuses to release a commit CI has not passed.** Opt-in config key. Before
+  anything is bumped, HEAD must be on the remote and GitHub must report it green: every
+  check run and commit status finished, none failed, at least one passed. A failed check is
+  named, a running one is waited for, and a commit no check has looked at is refused. When
+  release-kit runs inside Actions, the workflow run it belongs to is left out of the count.
+
 ### Changed
 
 - **Drafted notes keep updates to components that ship inside the product.** The assistant

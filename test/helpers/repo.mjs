@@ -78,6 +78,12 @@ function stubBin(bin, calls) {
     join(bin, 'gh'),
     `#!/bin/sh
 echo "gh $*" >> "${calls}"
+# The checks on a commit, for requireGreen: one tab-separated row per check run or status,
+# as the --jq filter would print them. GH_API_FAILS makes GitHub unreachable.
+case "$*" in
+  *check-runs*) [ -n "$GH_API_FAILS" ] && exit 1; printf '%s' "$GH_CHECK_RUNS"; exit 0 ;;
+  *commits/*/status*) [ -n "$GH_API_FAILS" ] && exit 1; printf '%s' "$GH_STATUSES"; exit 0 ;;
+esac
 case "$1 $2" in
   "release view") exit \${GH_RELEASE_EXISTS:-1} ;;
   "auth status") exit \${GH_AUTHED:-0} ;;

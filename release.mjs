@@ -92,6 +92,9 @@ import { fileURLToPath } from 'node:url'
  *   verify          string   command run during preflight — a project's own gate (tests,
  *                            build). Non-zero aborts before anything mutates, instead of a
  *                            prepublishOnly hook failing after the commit, tag and push
+ *   requireGreen    boolean  refuse to release a HEAD that GitHub does not report green:
+ *                            pushed, every check run and commit status finished, none of
+ *                            them failed. See `checkHeadIsGreen`
  *   assistant       string|object  drafting CLI for commit messages and notes. A key of
  *                            ASSISTANTS, "auto" for the first available, or null. The
  *                            object form { tool, model, effort } also pins which model and
@@ -147,6 +150,7 @@ const DEFAULTS = {
     '^(fixup|squash)!',
   ],
   verify: null,
+  requireGreen: false,
   hooks: {},
 }
 
@@ -3068,6 +3072,123 @@ if (!succeeds('git', ['remote', 'get-url', config.remote])) {
       else if (behind !== '0') fail(`${behind} commit(s) behind ${upstream} — pull first`)
       else ok(`up to date with ${upstream}`)
     }
+  }
+}
+
+/**
+ * Check run conclusions that mean the commit is not fit to release. `stale` is GitHub giving
+ * up on a run that never finished, which is not a pass either.
+ */
+const RED_CONCLUSIONS = new Set(['failure', 'cancelled', 'timed_out', 'action_required', 'stale'])
+
+/**
+ * Whether GitHub reports the commit being released as green — the gate `requireGreen` opts
+ * into, so a release cannot be cut from a commit CI failed on or has not finished with.
+ *
+ * Both of GitHub's check systems are read. Check runs are what Actions and GitHub Apps
+ * report; commit statuses are the older API that external CI (Buildkite, Jenkins, older
+ * integrations) still posts to. Reading only one would call a commit green while the other
+ * system has it red. The combined status's own `state` is not used: it says `pending` for a
+ * commit with no statuses at all, so the individual statuses are what count.
+ *
+ * Only `success` counts as a pass. `neutral` and `skipped` are not failures, but a commit
+ * whose every check was skipped has not been verified by anything, and zero checks is the
+ * same answer — both are refused rather than read as green.
+ *
+ * When this runs inside GitHub Actions, the job running it is itself an unfinished check run
+ * on the same commit — the `workflow_run` recipe in the README releases exactly the commit
+ * it runs on — and waiting for it would wait forever. Check runs belonging to the current
+ * workflow run are therefore skipped; jobs in the same workflow are what `needs:` orders.
+ *
+ * `{owner}/{repo}` is filled in by gh from the checkout, the same way `gh release create`
+ * resolves the repository the release step publishes to.
+ */
+function checkHeadIsGreen(sha) {
+  const api = (path, jq) => tryRead('gh', ['api', '--paginate', path, '--jq', jq])
+  const checkRuns = api(
+    `repos/{owner}/{repo}/commits/${sha}/check-runs?per_page=100`,
+    '.check_runs[] | [.name, .status, (.conclusion // ""), (.details_url // "")] | @tsv',
+  )
+  const statuses = api(
+    `repos/{owner}/{repo}/commits/${sha}/status?per_page=100`,
+    '.statuses[] | [.context, .state] | @tsv',
+  )
+  if (checkRuns === null || statuses === null) {
+    fail(`requireGreen: could not read the checks on ${sha.slice(0, 8)} from GitHub (gh api)`)
+    return
+  }
+  const ownRun =
+    process.env.GITHUB_ACTIONS === 'true' && process.env.GITHUB_RUN_ID
+      ? `/actions/runs/${process.env.GITHUB_RUN_ID}/`
+      : null
+  const rows = (text) =>
+    text
+      .split('\n')
+      .filter((line) => line.trim())
+      .map((line) => line.split('\t'))
+
+  const red = []
+  const waiting = []
+  let passed = 0
+  for (const [name, status, conclusion, url = ''] of rows(checkRuns)) {
+    if (ownRun && url.includes(ownRun)) continue
+    if (status !== 'completed') waiting.push(`${name} (${status})`)
+    else if (RED_CONCLUSIONS.has(conclusion)) red.push(`${name} (${conclusion})`)
+    else if (conclusion === 'success') passed += 1
+  }
+  for (const [context, state] of rows(statuses)) {
+    if (state === 'failure' || state === 'error') red.push(`${context} (${state})`)
+    else if (state === 'pending') waiting.push(`${context} (pending)`)
+    else if (state === 'success') passed += 1
+  }
+
+  const at = `HEAD (${sha.slice(0, 8)})`
+  if (red.length) {
+    fail(`requireGreen: ${at} is not green — ${red.join(', ')}`)
+  } else if (waiting.length) {
+    fail(
+      `requireGreen: checks on ${at} have not finished — ${waiting.join(', ')}.\n` +
+        '       Wait for them to complete, then re-run.',
+    )
+  } else if (!passed) {
+    fail(
+      `requireGreen: no check has passed on ${at} — nothing has verified it.\n` +
+        '       Push it and wait for CI, or turn requireGreen off for a repository without CI.',
+    )
+  } else {
+    ok(`${at} is green (${passed} check${passed === 1 ? '' : 's'} passed)`)
+  }
+}
+
+// Opt-in: the commit being released has to be one CI has seen and passed. That means it is
+// on the remote — a local commit has no checks to read — and that what the commit step is
+// about to add is not part of the release, since CI never saw that either.
+if (config.requireGreen) {
+  const upstream = branch && !detached ? `${config.remote}/${branch}` : null
+  const sha = tryRead('git', ['rev-parse', 'HEAD'])
+  const onRemote =
+    upstream && succeeds('git', ['rev-parse', '--verify', '--quiet', `refs/remotes/${upstream}`])
+  const ahead = onRemote ? tryRead('git', ['rev-list', '--count', `${upstream}..HEAD`]) : null
+  if (dirty && runs('commit')) {
+    fail(
+      'requireGreen: the working tree would be committed and released without CI having ' +
+        'run on it.\n       Commit and push it, wait for the checks, then release.',
+    )
+  }
+  if (!succeeds('gh', ['--version']) || !succeeds('gh', ['auth', 'status'])) {
+    fail('requireGreen reads the checks with `gh`, which is not installed or not authenticated')
+  } else if (!onRemote) {
+    fail(
+      `requireGreen: ${upstream ?? 'this branch'} does not exist on ${config.remote}, so no ` +
+        'check has run on HEAD. Push it and wait for CI.',
+    )
+  } else if (ahead !== '0') {
+    fail(
+      `requireGreen: HEAD is ${ahead ?? 'an unknown number of'} commit(s) ahead of ` +
+        `${upstream}, so CI has not seen it. Push it and wait for the checks.`,
+    )
+  } else if (sha) {
+    checkHeadIsGreen(sha)
   }
 }
 

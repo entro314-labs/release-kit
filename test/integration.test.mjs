@@ -752,6 +752,122 @@ describe('choosing where notes come from', () => {
   })
 })
 
+describe('requireGreen', () => {
+  const green = () =>
+    makeRepo({ config: { publish: null, steps: ['version', 'tag', 'push'], requireGreen: true } })
+  const run = (name, status, conclusion = '', url = '') =>
+    `${name}\t${status}\t${conclusion}\t${url}\n`
+
+  it('releases a pushed HEAD whose checks all passed', () => {
+    const repo = green()
+    const { status, stdout } = release(repo, ['minor', '--yes'], {
+      GH_CHECK_RUNS: run('test', 'completed', 'success') + run('lint', 'completed', 'skipped'),
+      GH_STATUSES: 'buildkite\tsuccess\n',
+    })
+    assert.equal(status, 0, stdout)
+    assert.match(stdout, /HEAD \([0-9a-f]{8}\) is green \(2 checks passed\)/)
+    assert.ok(tagsOnRemote(repo).includes('v1.1.0'))
+    assert.ok(
+      stubCalls(repo).some((c) =>
+        /gh api --paginate repos\/\{owner\}\/\{repo\}\/commits\/[0-9a-f]{40}\/check-runs/.test(c),
+      ),
+      'paginates the check runs of the exact commit',
+    )
+  })
+
+  it('refuses a failed check run and names it, before anything mutates', () => {
+    const repo = green()
+    const { status, stdout } = release(repo, ['minor', '--yes'], {
+      GH_CHECK_RUNS: run('test', 'completed', 'success') + run('e2e', 'completed', 'failure'),
+    })
+    assert.equal(status, 1, stdout)
+    assert.match(stdout, /is not green — e2e \(failure\)/)
+    assert.deepEqual(tagsOnRemote(repo), [])
+    assert.equal(JSON.parse(readFile(repo, 'package.json')).version, '1.0.0')
+  })
+
+  it('refuses a failed commit status from outside Actions', () => {
+    const repo = green()
+    const { status, stdout } = release(repo, ['minor', '--yes'], {
+      GH_CHECK_RUNS: run('test', 'completed', 'success'),
+      GH_STATUSES: 'jenkins\terror\n',
+    })
+    assert.equal(status, 1, stdout)
+    assert.match(stdout, /jenkins \(error\)/)
+  })
+
+  it('says to wait while checks are still running', () => {
+    const repo = green()
+    const { status, stdout } = release(repo, ['minor', '--yes'], {
+      GH_CHECK_RUNS: run('test', 'in_progress') + run('lint', 'completed', 'success'),
+    })
+    assert.equal(status, 1, stdout)
+    assert.match(stdout, /have not finished — test \(in_progress\)/)
+    assert.match(stdout, /Wait for them to complete/)
+  })
+
+  it('refuses a commit nothing has checked', () => {
+    // Zero checks is not green: it is a commit no CI has looked at.
+    const repo = green()
+    const { status, stdout } = release(repo, ['minor', '--yes'], {
+      GH_CHECK_RUNS: run('lint', 'completed', 'skipped'),
+    })
+    assert.equal(status, 1, stdout)
+    assert.match(stdout, /no check has passed/)
+  })
+
+  it('refuses a HEAD that is not on the remote yet', () => {
+    const repo = green()
+    writeFileSync(join(repo.root, 'x.txt'), 'x')
+    execFileSync('git', ['add', '-A'], { cwd: repo.root })
+    execFileSync('git', ['commit', '-qm', 'fix: local only'], { cwd: repo.root })
+    const { status, stdout } = release(repo, ['minor', '--yes'], {
+      GH_CHECK_RUNS: run('test', 'completed', 'success'),
+    })
+    assert.equal(status, 1, stdout)
+    assert.match(stdout, /HEAD is 1 commit\(s\) ahead of origin\/main, so CI has not seen it/)
+  })
+
+  it('refuses a working tree the commit step would release unchecked', () => {
+    const repo = green()
+    writeFileSync(join(repo.root, 'x.txt'), 'x')
+    const { status, stdout } = release(repo, ['minor', '--commit', '--yes'], {
+      GH_CHECK_RUNS: run('test', 'completed', 'success'),
+    })
+    assert.equal(status, 1, stdout)
+    assert.match(stdout, /working tree would be committed and released without CI/)
+  })
+
+  it('does not wait for the workflow run it is running in', () => {
+    // Released from a workflow on the commit it checks, its own job is an unfinished check
+    // run on that commit. Waiting for it would wait forever.
+    const repo = green()
+    const { status, stdout } = release(repo, ['minor', '--yes'], {
+      GITHUB_ACTIONS: 'true',
+      GITHUB_RUN_ID: '4242',
+      GH_CHECK_RUNS:
+        run('release', 'in_progress', '', 'https://github.com/o/r/actions/runs/4242/job/1') +
+        run('test', 'completed', 'success', 'https://github.com/o/r/actions/runs/4100/job/7'),
+    })
+    assert.equal(status, 0, stdout)
+    assert.match(stdout, /is green \(1 check passed\)/)
+  })
+
+  it('refuses when GitHub cannot be asked', () => {
+    const repo = green()
+    const { status, stdout } = release(repo, ['minor', '--yes'], { GH_API_FAILS: '1' })
+    assert.equal(status, 1, stdout)
+    assert.match(stdout, /could not read the checks/)
+  })
+
+  it('is off by default', () => {
+    const repo = makeRepo({ config: { publish: null, steps: ['version', 'tag', 'push'] } })
+    const { status, stdout } = release(repo, ['minor', '--yes'])
+    assert.equal(status, 0, stdout)
+    assert.ok(!stubCalls(repo).some((c) => c.includes('check-runs')))
+  })
+})
+
 describe('drafted release notes', () => {
   const drafting = () => {
     const repo = makeRepo({ config: { publish: null, steps: ['version', 'tag'] } })
