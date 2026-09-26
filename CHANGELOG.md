@@ -76,6 +76,9 @@ All notable changes to @entro314labs/release-kit.
   The recipe now requires a successful `push` run on `main`, checks out the commit that was
   checked (`head_sha`, not the branch tip) and puts the branch back on it so preflight's
   detached-HEAD and behind-remote checks still apply.
+- **The release-notes docs said chores, CI and docs commits were hidden.** Commit-derived
+  notes report every type by default and always have; `hiddenTypes` is what hides them. The
+  README now says so and lists the sections.
 - The examples pin `actions/checkout@v7` and `release-kit@2.9.4` instead of `v5`, `2.3.0`
   and `2.8.0`.
 

@@ -289,8 +289,11 @@ Notes resolve in this order:
 2. The `## [Unreleased]` section, if the version has no section of its own — this is the
    same content that step 2 above is about to promote.
 3. The commits grouped by Conventional Commit type — Features, Bug Fixes, Performance
-   Improvements, Reverts, with breaking changes first and chores, CI and docs hidden. Each
-   bullet links to its commit, and `closes #12` / `fixes #34` in a message becomes a link to
+   Improvements, Reverts, Dependencies, Documentation, Code Refactoring, Build System,
+   Continuous Integration, Tests, Styles, Miscellaneous Chores — with breaking changes
+   first. Every type is reported, since a changelog is a record; list the ones to leave out
+   in `hiddenTypes` — `["chore", "ci", "docs"]`, say, for a shorter list. A type outside
+   the table, such as `security:`, lands under Other Changes. Each bullet links to its commit, and `closes #12` / `fixes #34` in a message becomes a link to
    the issue. A `BREAKING CHANGE:` footer is used in place of the subject, since it explains
    the break. A commit reverted within the same release drops out along with its revert.
    A **New Contributors** section names anyone whose first commit to the repository is in
