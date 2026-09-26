@@ -44,6 +44,10 @@ All notable changes to @entro314labs/release-kit.
   first heading of any kind, which was `[Unreleased]`. It is now filed below it, so
   `[Unreleased]` stays the top section.
 
+- **A `verify` command that printed more than 1 MiB was reported as failing.** Its output
+  was captured with Node's default buffer, so a passing but chatty test suite or build
+  overflowed it and preflight said "verify failed". The capture now holds 64 MiB.
+
 - **A stable release silently dropped wording edited into its candidates' sections.** Its
   notes are generated from every commit since the last stable tag, so text edited into a
   `[2.0.0-rc.1]` section never reached the `2.0.0` tag or release, and nothing said so.

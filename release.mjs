@@ -3804,7 +3804,8 @@ if (taggedCommit && runs('tag') && wouldCommit.length) {
 if (config.verify) {
   note(`running verify: ${config.verify}`)
   try {
-    execSync(config.verify, { stdio: 'pipe', encoding: 'utf8' })
+    // A test suite or a build can print far more than Node's 1 MiB default capture.
+    execSync(config.verify, { stdio: 'pipe', encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 })
     ok(`verify passed: ${config.verify}`)
   } catch (err) {
     const tail = `${err.stdout ?? ''}${err.stderr ?? ''}`.trim().split('\n').slice(-12).join('\n')

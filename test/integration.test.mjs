@@ -185,6 +185,21 @@ describe('preflight', () => {
     assert.match(stdout, /verify passed/)
   })
 
+  it('passes a gate that prints more than a megabyte', () => {
+    // A test suite or a build can print a lot. Past Node's default 1 MiB output buffer the
+    // capture threw, and a passing gate was reported as "verify failed".
+    const repo = makeRepo({
+      config: {
+        publish: null,
+        steps: ['version', 'tag', 'push'],
+        verify: 'node -e "process.stdout.write(\'x\'.repeat(2 * 1024 * 1024))"',
+      },
+    })
+    const { status, stdout } = release(repo, ['minor', '--yes'])
+    assert.equal(status, 0, stdout.slice(-2000))
+    assert.match(stdout, /verify passed/)
+  })
+
   it('warns when package.json names a different repository than the remote', () => {
     const repo = makeRepo()
     const manifest = JSON.parse(readFile(repo, 'package.json'))
