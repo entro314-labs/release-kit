@@ -1,0 +1,3 @@
+# Check out LF everywhere. Windows runners default to core.autocrlf=true, which turned
+# every file into CRLF and failed oxfmt --check on all of them.
+* text=auto eol=lf
