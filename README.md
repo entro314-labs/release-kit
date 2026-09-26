@@ -393,6 +393,9 @@ rather than stopping at the first problem.
   previous tag reachable it passes, without one it fails `auto` (the bump would be inferred
   from partial history) and warns otherwise
 - A changelog section for the version exists _(warning — it falls back to generated notes)_
+- Notes drafted by an [assistant](#-assistant-optional) carry no entry it marked `[???]`
+  as unsure — refused under `--yes` or without a terminal, listed for review at the prompt
+  otherwise
 
 Under `--dry-run` the failures are reported and then the remaining steps are shown anyway,
 so you can see the whole plan without fixing the blockers first.
@@ -987,6 +990,18 @@ version and dependency bumps) are left out, except a dependency that ships insid
 product — a bundled runtime, a sidecar binary, an embedded engine — since users run that
 code; a fix is described as what works now rather than what was broken; and a commit's
 [`Notes:` line](#release-notes) is kept in the author's words.
+
+**An entry the model is unsure of is flagged, not guessed.** The prompt lets it start a
+bullet with `[???]` when it cannot tell whether a change is user-facing or what it means for
+someone upgrading. Flagged entries are listed at the confirmation prompt, and answering `y`
+releases them as shown with the marker removed — your answer is the review. With `--yes`,
+or with no terminal to ask on (CI), there is nobody to review them, so preflight refuses
+before anything mutates: re-run in a terminal, or write the notes into `[Unreleased]` with
+the entries resolved, since a hand-written section wins over a draft. When a dirty tree
+defers drafting past the prompt, the check runs right after the working-tree commit instead
+and asks again (or, non-interactively, stops there with only that commit made). This applies
+to drafted notes only — commit-derived and hand-written notes are never checked for the
+marker.
 
 With `--commit`, notes are drafted _after_ that commit lands, so they describe the change it
 just made. Merge, release, `WIP` and `fixup!`/`squash!` commits are excluded from the prompt.

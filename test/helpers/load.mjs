@@ -35,7 +35,7 @@ export {
   changelogSection, rollUnreleased, insertChangelogSection, changelogOutOfOrder,
   withChangelogLinks, remoteLinks,
   parseCommit, notesTrailer, inferBump, changelogFromCommits, withoutRevertedCommits, newContributors,
-  cleanDraft, cleanNotes, linkCitedCommits, CONVENTIONAL_RE, CHANGELOG_SECTIONS, HOSTS,
+  cleanDraft, cleanNotes, linkCitedCommits, uncertainEntries, withoutUnsureMarkers, CONVENTIONAL_RE, CHANGELOG_SECTIONS, HOSTS,
   lintSubjects, CHANGELOG_TYPES, KNOWN_TYPES, WRITE_TYPES,
   readVersionFrom, writeVersionInto, versionSource, patternFor, expandPaths, workspaceCrates,
   applyVersionMarkers, hasVersionMarkers, versionMode,

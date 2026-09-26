@@ -137,3 +137,21 @@ describe('linkCitedCommits', () => {
     assert.equal(kit.linkCitedCommits('- Something', commits, links), '- Something')
   })
 })
+
+describe('entries the model was unsure of', () => {
+  const draft =
+    '### Fixed\n\n- [???] Tweaks the retry loop (abc1234)\n- The cursor stays put (def5678)'
+
+  it('finds the flagged lines and nothing else', () => {
+    assert.deepEqual(kit.uncertainEntries(draft), ['- [???] Tweaks the retry loop (abc1234)'])
+    assert.deepEqual(kit.uncertainEntries('### Fixed\n\n- Fine.'), [])
+    assert.deepEqual(kit.uncertainEntries(null), [])
+  })
+
+  it('drops the marker once a human has reviewed them', () => {
+    assert.equal(
+      kit.withoutUnsureMarkers(draft),
+      '### Fixed\n\n- Tweaks the retry loop (abc1234)\n- The cursor stays put (def5678)',
+    )
+  })
+})

@@ -1091,6 +1091,30 @@ function linkCitedCommits(notes, commits, links) {
 }
 
 /**
+ * The marker a drafting model puts on an entry it is not sure of — whether the change is
+ * user-facing, or what it means for someone upgrading. The alternative is a confident guess
+ * published as fact; a flagged entry is a question for the human cutting the release.
+ */
+const UNSURE = '[???]'
+
+/**
+ * Drafted entries the model flagged as unsure, as the lines it wrote them on. Drafts are
+ * validated, not trusted: like an invented commit hash, a flagged entry must not reach a
+ * tag, a changelog or a release page without someone having looked at it.
+ *
+ * @returns {string[]}
+ */
+function uncertainEntries(notes) {
+  return (notes ?? '')
+    .split('\n')
+    .map((line) => line.trim())
+    .filter((line) => line.includes(UNSURE))
+}
+
+/** The notes with the marker removed, once a human has reviewed the flagged entries. */
+const withoutUnsureMarkers = (notes) => notes.replaceAll(`${UNSURE} `, '').replaceAll(UNSURE, '')
+
+/**
  * Draft release notes from the commit log.
  *
  * @returns {string | null} markdown body (no version heading), or null
@@ -1117,6 +1141,8 @@ function draftReleaseNotes(version, commits, lastTag, links) {
     '  binary, an embedded engine or database). Users run that code, so its update is a',
     '  user-visible change: name the component and the version it moved to.',
     '- For bug fixes, describe what works now, not what was broken.',
+    '- If you cannot tell whether a change is user-facing, or what it means for someone',
+    `  upgrading, start that bullet with ${UNSURE} — a person will resolve it. Do not guess.`,
     "- A commit with a `Notes:` line carries its author's wording for the entry: use that",
     '  text as written, changing it only to fit the heading or to merge it with related work.',
     '- Write for someone upgrading: say what changed for them, not which files moved.',
@@ -3282,6 +3308,18 @@ const notesDeferred = !!(dirty && runs('commit'))
 let notesPending = false
 
 /**
+ * Entries the assistant flagged as unsure in the notes it drafted — see `uncertainEntries`.
+ * Only a draft can carry them: hand-written and commit-derived notes are someone's words.
+ */
+let unsure = []
+
+/**
+ * Whether a person answers the confirmation prompt. Under --yes, or with no terminal to ask
+ * on, nobody reviews anything before it is tagged and published.
+ */
+const confirming = !assumeYes && !dryRun && !!process.stdin.isTTY
+
+/**
  * Notes for a version, in descending order of how much they can be trusted:
  * an assistant's prose when one is configured, otherwise the commits grouped by
  * Conventional Commit type. Only when neither yields anything does GitHub generate them.
@@ -3321,11 +3359,30 @@ function draftNotesFor(v) {
     )
   }
   note(`drafting notes from ${subjects.length} commit(s) with ${assistantName}...`)
+  const drafted = draftReleaseNotes(v, commits, lastTag, remoteLinks(config.remote))
+  unsure = uncertainEntries(drafted)
   return (
-    draftReleaseNotes(v, commits, lastTag, remoteLinks(config.remote)) ??
+    drafted ??
     changelogFromCommits(commits, remoteLinks(config.remote), config.hiddenTypes, contributors)
   )
 }
+
+/**
+ * The flagged entries, listed for whoever has to resolve them. Non-interactively nobody can,
+ * so preflight refuses; at the prompt the person answering is the review.
+ */
+const listUnsure = () => {
+  const one = unsure.length === 1
+  const what = `${unsure.length} drafted entr${one ? 'y' : 'ies'} ${UNSURE}`
+  return `${assistantName} marked ${what} — it could not tell what ${one ? 'it means' : 'they mean'} for users:\n${indent(unsure.join('\n'))}`
+}
+
+/** What to do about flagged entries when nobody is at the prompt to review them. */
+const handWritten = config.changelog
+  ? `, or write the notes into [Unreleased] in ${config.changelog} with them resolved — a hand-written section wins over a draft`
+  : ''
+const UNSURE_FIX = `       Re-run without --yes in a terminal to review them at the prompt${handWritten}.`
+
 const changelogText =
   config.changelog && existsSync(config.changelog) ? readFileSync(config.changelog, 'utf8') : null
 if (changelogText) reportChangelogOrder(changelogText)
@@ -3360,6 +3417,10 @@ if (notesSource === 'github') {
       ok(`release notes will be ${assistant ? 'drafted' : 'generated'} after the commit`)
     } else {
       draftedNotes = draftNotesFor(version)
+      if (unsure.length) {
+        if (confirming) warn(`${listUnsure()}\n       They are shown again at the prompt.`)
+        else fail(`${listUnsure()}\n${UNSURE_FIX}`)
+      }
       if (draftedNotes) {
         notes = draftedNotes
         ok(
@@ -3454,19 +3515,43 @@ if (dirty && runs('commit') && !dryRun) {
   console.log(indent(commitMessage))
 }
 
-if (!assumeYes && !dryRun && process.stdin.isTTY) {
-  if (notes) console.log(`\n${bold('Release notes')}\n${indent(notes)}`)
+/** Ask a yes/no question on the terminal; anything but yes is no. */
+async function ask(question) {
   const rl = createInterface({ input: process.stdin, output: process.stdout })
   let answer = ''
   try {
-    answer = await rl.question(`\nRelease ${bold(tag)} of ${projectName}? [y/N] `)
+    answer = await rl.question(question)
   } catch {
     // Ctrl+C or Ctrl+D at the prompt rejects the question. That is a decline, not a
     // crash — without this it exits on an unhandled AbortError and a stack trace.
   } finally {
     rl.close()
   }
-  if (!/^y(es)?$/i.test(answer.trim())) {
+  return /^y(es)?$/i.test(answer.trim())
+}
+
+/**
+ * Show the notes, with the entries the assistant was unsure of called out, and ask. A yes is
+ * the review those entries were waiting for, so the marker comes off before anything is
+ * written: `[???]` in a tag or on a release page helps nobody.
+ */
+async function confirmRelease(question) {
+  if (notes) console.log(`\n${bold('Release notes')}\n${indent(notes)}`)
+  if (unsure.length) {
+    console.log(`\n${yellow(bold('Review these'))} — ${listUnsure()}`)
+    console.log(dim('  Answering y releases them as shown, without the marker.'))
+  }
+  const yes = await ask(question)
+  if (yes && unsure.length) {
+    notes = withoutUnsureMarkers(notes)
+    if (draftedNotes) draftedNotes = withoutUnsureMarkers(draftedNotes)
+    unsure = []
+  }
+  return yes
+}
+
+if (confirming) {
+  if (!(await confirmRelease(`\nRelease ${bold(tag)} of ${projectName}? [y/N] `))) {
     // Leave the index exactly as it was found.
     if (didStage) mutate('git', ['reset', '--quiet'])
     abort('cancelled')
@@ -3488,6 +3573,18 @@ if (dirty && runs('commit')) {
   if (notesPending && !dryRun) {
     draftedNotes = draftNotesFor(version)
     if (draftedNotes) notes = draftedNotes
+    // These notes were drafted after the prompt, so nobody has seen them. Flagged entries
+    // get the review preflight would have given them; the commit just made stays, and a
+    // re-run drafts from a clean tree — before the prompt, where they can be reviewed.
+    if (unsure.length) {
+      const committed =
+        '       The working tree is committed; nothing else has changed. Re-running drafts the ' +
+        'notes during preflight, before anything else happens.'
+      if (!confirming) abort(`${listUnsure()}\n${UNSURE_FIX}\n${committed}`)
+      if (!(await confirmRelease(`\nRelease ${bold(tag)} with these notes? [y/N] `))) {
+        abort(`cancelled\n${committed}`)
+      }
+    }
   }
 }
 

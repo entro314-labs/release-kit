@@ -796,6 +796,86 @@ describe('drafted release notes', () => {
   })
 })
 
+describe('drafted entries the assistant marked [???]', () => {
+  const FLAGGED = '### Fixed\n\n- [???] Tweaks the retry loop\n- The cursor stays put'
+  const setup = () => {
+    const config = { publish: null, steps: ['version', 'changelog', 'tag', 'push'] }
+    const repo = makeRepo({ config, changelog: '# Changelog\n\n## [Unreleased]\n' })
+    execFileSync('git', ['tag', '-a', 'v1.0.0', '-m', 'base'], { cwd: repo.root })
+    writeFileSync(join(repo.root, 'retry.txt'), 'x')
+    execFileSync('git', ['add', '-A'], { cwd: repo.root })
+    execFileSync('git', ['commit', '-qm', 'fix: retry loop'], { cwd: repo.root })
+    execFileSync('git', ['push', '-q', 'origin', 'main', '--tags'], { cwd: repo.root })
+    return { repo, prompt: stubAssistant(repo) }
+  }
+
+  it('asks the model to flag what it is unsure of', () => {
+    const { repo, prompt } = setup()
+    release(repo, ['1.0.1', '--assistant', 'claude', '--yes'], {
+      CLAUDE_DRAFT: '### Fixed\n\n- The retry loop gives up after five tries',
+    })
+    assert.match(readFileSync(prompt, 'utf8'), /start that bullet with \[\?\?\?\]/)
+  })
+
+  it('refuses under --yes before anything mutates, and names the entry', () => {
+    // Nobody is at a prompt to review it, and a guess published as fact is what the marker
+    // exists to prevent — the same "validated, not trusted" rule as an invented hash.
+    const { repo } = setup()
+    const { status, stdout } = release(repo, ['1.0.1', '--assistant', 'claude', '--yes'], {
+      CLAUDE_DRAFT: FLAGGED,
+    })
+    assert.equal(status, 1, stdout)
+    assert.match(stdout, /marked 1 drafted entry \[\?\?\?\]/)
+    assert.match(stdout, /- \[\?\?\?\] Tweaks the retry loop/)
+    assert.match(stdout, /Re-run without --yes in a terminal/)
+    assert.deepEqual(tagsOnRemote(repo), ['v1.0.0'], 'nothing was tagged')
+    assert.equal(JSON.parse(readFile(repo, 'package.json')).version, '1.0.0')
+  })
+
+  it('lets a draft with nothing flagged through', () => {
+    const { repo } = setup()
+    const { status, stdout } = release(repo, ['1.0.1', '--assistant', 'claude', '--yes'], {
+      CLAUDE_DRAFT: '### Fixed\n\n- The retry loop gives up after five tries',
+    })
+    assert.equal(status, 0, stdout)
+    assert.match(readFile(repo, 'CHANGELOG.md'), /gives up after five tries/)
+  })
+
+  it('stops after the working-tree commit when the notes were drafted after the prompt', () => {
+    // With a dirty tree the notes wait for the commit, which comes after the prompt. The
+    // commit stays; nothing past it happens, and the re-run drafts during preflight.
+    const { repo } = setup()
+    writeFileSync(join(repo.root, 'more.txt'), 'y')
+    const args = ['1.0.1', '--commit', '--assistant', 'claude', '--yes']
+    const { status, stdout } = release(repo, args, {
+      CLAUDE_DRAFT: FLAGGED,
+    })
+    assert.equal(status, 1, stdout)
+    assert.match(stdout, /The working tree is committed; nothing else has changed/)
+    const log = execFileSync('git', ['log', '--format=%s', '-2'], {
+      cwd: repo.root,
+      encoding: 'utf8',
+    })
+    assert.match(log, /^chore: update more\.txt\n/, 'the working tree was committed')
+    assert.deepEqual(tagsOnRemote(repo), ['v1.0.0'], 'nothing was tagged')
+    assert.equal(JSON.parse(readFile(repo, 'package.json')).version, '1.0.0')
+  })
+
+  it('is left to hand-written notes', () => {
+    // The marker is the assistant's. A changelog someone wrote is theirs to word.
+    const { repo } = setup()
+    writeFileSync(
+      join(repo.root, 'CHANGELOG.md'),
+      '# Changelog\n\n## [Unreleased]\n\n- [???] Ask Sam\n',
+    )
+    execFileSync('git', ['commit', '-qam', 'docs: notes'], { cwd: repo.root })
+    const { status, stdout } = release(repo, ['1.0.1', '--assistant', 'claude', '--yes'], {
+      CLAUDE_DRAFT: FLAGGED,
+    })
+    assert.equal(status, 0, stdout)
+  })
+})
+
 describe('which tag a release reads history from', () => {
   const tagOnly = () => makeRepo({ config: { publish: null, steps: ['version', 'tag', 'push'] } })
   const commit = (repo, subject, file = subject.replace(/\W/g, '')) => {

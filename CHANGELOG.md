@@ -10,6 +10,11 @@ All notable changes to @entro314labs/release-kit.
   body replaces the subject in commit-derived notes, and is passed to a drafting assistant
   with the instruction to keep the author's wording. `Notes: no-notes` keeps a commit out of
   the notes altogether, without changing the version bump it implies.
+- **A drafted entry the assistant is unsure of is flagged instead of guessed.** The notes
+  prompt lets the model start a bullet with `[???]` when it cannot tell whether a change is
+  user-facing. Flagged entries are listed at the confirmation prompt and released without
+  the marker on a `y`; under `--yes` or without a terminal, preflight refuses before
+  anything mutates, since nobody has reviewed them. Only assistant drafts are checked.
 
 ### Changed
 
