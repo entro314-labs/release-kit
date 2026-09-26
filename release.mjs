@@ -1464,6 +1464,32 @@ function changelogOutOfOrder(text) {
   return versions.filter((v, i) => i > 0 && compareVersions(versions[i - 1], v) < 0)
 }
 
+/**
+ * The release candidates of a stable version that the changelog has sections for: for
+ * `2.0.0`, the `2.0.0-rc.1` and `2.0.0-beta.3` headings.
+ *
+ * A stable release reads history from the last stable tag and generates its notes from
+ * those commits, so wording someone edited into a candidate's section does not carry over.
+ * The sections stay in the file; this is how the release notices they exist.
+ *
+ * @returns {string[]} the candidate versions, in file order
+ */
+function candidateSections(text, version) {
+  const base = parseVersion(version)
+  if (!base || base.pre.length) return []
+  return [...text.matchAll(/^## \[?v?(\d+\.\d+\.\d+-[\w.]+)\]?/gm)]
+    .map((m) => m[1])
+    .filter((v) => {
+      const parsed = parseVersion(v)
+      return (
+        parsed &&
+        parsed.major === base.major &&
+        parsed.minor === base.minor &&
+        parsed.patch === base.patch
+      )
+    })
+}
+
 /** The `## ` heading offsets in a changelog, in file order. */
 const sectionOffsets = (text) => [...text.matchAll(/^## .*$/gm)].map((m) => m.index)
 
@@ -3672,6 +3698,19 @@ if (notesSource === 'github') {
 
   // Generate, either because nothing was written or because a source was named.
   if (!notes) {
+    // Candidates' sections are not a source for the stable release: its notes come from all
+    // the commits since the last stable tag. Say so while there is still time to write the
+    // wording that should survive into [Unreleased] — nothing else would.
+    const candidates =
+      notesSource === 'auto' && changelogText ? candidateSections(changelogText, version) : []
+    if (candidates.length) {
+      warn(
+        `${config.changelog} has sections for ${candidates.join(', ')}, but ${version} ` +
+          'has none of its own, so its notes are generated from every commit since the last ' +
+          'stable release.\n       Anything edited into those sections is not carried over. ' +
+          `To release with it, write the ${version} notes into [Unreleased] and re-run.`,
+      )
+    }
     if (notesDeferred) {
       notesPending = true
       ok(`release notes will be ${assistant ? 'drafted' : 'generated'} after the commit`)

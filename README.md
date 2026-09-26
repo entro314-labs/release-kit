@@ -323,7 +323,11 @@ patch tagged on top of a later minor does not drag the baseline backwards.
 `2.0.0-rc.1` and `-rc.2` reads history from the last _stable_ tag, so the notes describe
 everything the release ships rather than the gap between the last two candidates — which
 is usually just the release commit. Releasing a candidate is unchanged: each one's notes
-say what changed in that candidate.
+say what changed in that candidate. The candidates' own changelog sections are not a source
+for the stable release: its notes are generated from those commits, so wording edited into
+a `[2.0.0-rc.1]` section does not carry over. The sections stay in the file, preflight warns
+when it finds them, and writing the `2.0.0` notes into `[Unreleased]` before releasing is
+how hand-written wording reaches the stable release.
 
 `--notes <source>` forces one instead of walking that list: `changelog`, `assistant`,
 `commits`, or `github`. A named source that produces nothing is an error rather than a

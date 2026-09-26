@@ -1136,6 +1136,62 @@ describe('which tag a release reads history from', () => {
     assert.match(annotation, /rc feedback typo/, 'the rc.2 fix is in the stable notes')
   })
 
+  it('generates the stable notes from commits, not from edited candidate sections', () => {
+    // Pinned behaviour: a stable release has no section of its own, so its notes come from
+    // every commit since the last stable tag. Wording edited into a candidate's section is
+    // not carried over — the sections stay in the file, and the release says so.
+    const repo = makeRepo({
+      config: { publish: null, steps: ['version', 'changelog', 'tag', 'push'] },
+      changelog: '# Changelog\n\n## [Unreleased]\n',
+    })
+    tag(repo, 'v1.0.0')
+    commit(repo, 'feat: big new dashboard')
+    release(repo, ['2.0.0-rc.1', '--yes'])
+    const edited = readFile(repo, 'CHANGELOG.md').replace(
+      /(## \[2\.0\.0-rc\.1\][^\n]*\n)/,
+      '$1\nHand-edited: the dashboard replaces the old overview page.\n',
+    )
+    writeFileSync(join(repo.root, 'CHANGELOG.md'), edited)
+    execFileSync('git', ['commit', '-qam', 'docs: reword the rc notes'], { cwd: repo.root })
+
+    const { status, stdout } = release(repo, ['2.0.0', '--yes'])
+    assert.equal(status, 0, stdout)
+    assert.match(stdout, /CHANGELOG\.md has sections for 2\.0\.0-rc\.1, but 2\.0\.0 has none/)
+    const annotation = execFileSync('git', ['tag', '-l', 'v2.0.0', '--format=%(contents)'], {
+      cwd: repo.root,
+      encoding: 'utf8',
+    })
+    assert.match(annotation, /big new dashboard/, 'generated from the commits')
+    assert.ok(!annotation.includes('Hand-edited'), 'the candidate wording is not carried over')
+    const changelog = readFile(repo, 'CHANGELOG.md')
+    assert.match(changelog, /## \[2\.0\.0\][\s\S]*## \[2\.0\.0-rc\.1\][\s\S]*Hand-edited/)
+  })
+
+  it('uses [Unreleased] for the stable notes when it was written, and stays quiet', () => {
+    const repo = makeRepo({
+      config: { publish: null, steps: ['version', 'changelog', 'tag', 'push'] },
+      changelog: '# Changelog\n\n## [Unreleased]\n',
+    })
+    tag(repo, 'v1.0.0')
+    commit(repo, 'feat: big new dashboard')
+    release(repo, ['2.0.0-rc.1', '--yes'])
+    const withNotes = readFile(repo, 'CHANGELOG.md').replace(
+      '## [Unreleased]\n',
+      '## [Unreleased]\n\n- The dashboard replaces the overview page.\n',
+    )
+    writeFileSync(join(repo.root, 'CHANGELOG.md'), withNotes)
+    execFileSync('git', ['commit', '-qam', 'docs: write the 2.0.0 notes'], { cwd: repo.root })
+
+    const { status, stdout } = release(repo, ['2.0.0', '--yes'])
+    assert.equal(status, 0, stdout)
+    assert.ok(!stdout.includes('has sections for'), stdout)
+    const annotation = execFileSync('git', ['tag', '-l', 'v2.0.0', '--format=%(contents)'], {
+      cwd: repo.root,
+      encoding: 'utf8',
+    })
+    assert.match(annotation, /replaces the overview page/)
+  })
+
   it('still scopes a release candidate to what changed since the previous one', () => {
     // Rolling up is only right for the stable release. Each candidate's own notes should
     // say what changed in that candidate, or they all repeat the whole cycle.

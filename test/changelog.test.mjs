@@ -208,3 +208,18 @@ describe('link reference definitions', () => {
     assert.match(out, /compare\/release-1\.1\.0\.\.\.release-1\.2\.0/)
   })
 })
+
+describe('candidateSections', () => {
+  const text =
+    '# Changelog\n\n## [Unreleased]\n\n## [2.0.0-rc.2] - 2026-09-02\n\n- b\n\n' +
+    '## v2.0.0-beta.1\n\n- a\n\n## [1.9.0-rc.1]\n\n- old\n\n## [1.8.0]\n\n- c\n'
+
+  it('finds the candidates for the stable version being released', () => {
+    assert.deepEqual(kit.candidateSections(text, '2.0.0'), ['2.0.0-rc.2', '2.0.0-beta.1'])
+  })
+
+  it('finds nothing for another version, or for a candidate itself', () => {
+    assert.deepEqual(kit.candidateSections(text, '2.1.0'), [])
+    assert.deepEqual(kit.candidateSections(text, '2.0.0-rc.3'), [])
+  })
+})

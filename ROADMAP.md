@@ -174,7 +174,9 @@ Things that need investigation before they could even be scoped.
   have their own CLIs and release APIs. Whether that is a step-level abstraction or simply
   out of scope is undecided; nobody has asked for it.
 - **Prerelease promotion.** The notes half is answered: a stable release reads history from
-  the last stable tag, absorbing the candidates that led to it. What is still open is
+  the last stable tag, absorbing the candidates that led to it; the candidates' changelog
+  sections are not merged into it (preflight warns when they exist, and `[Unreleased]` is
+  where wording meant for the stable release goes). What is still open is
   whether the dist-tag should move off the prerelease channel on promotion, and whether
   prior release candidates should be marked superseded on the forge.
 - **Assistant cost.** Each drafting call allows 180 seconds and a release can make two.

@@ -31,6 +31,13 @@ All notable changes to @entro314labs/release-kit.
 
 ### Fixed
 
+- **A stable release silently dropped wording edited into its candidates' sections.** Its
+  notes are generated from every commit since the last stable tag, so text edited into a
+  `[2.0.0-rc.1]` section never reached the `2.0.0` tag or release, and nothing said so.
+  That is still how the notes are built; preflight now warns when the changelog has
+  candidate sections and the stable version has none, and says to write the notes into
+  `[Unreleased]` to keep them.
+
 - **An npm too old for trusted publishing failed after the push.** Under OIDC the token
   check is skipped, and nothing asked which npm would run the publish — but trusted
   publishing needs npm 11.5.1 or later, and an older one fails at `npm publish`, after the
