@@ -2234,6 +2234,14 @@ if (positionals.length > 1) {
     : ''
   abort(`unexpected argument${extras.length > 1 ? 's' : ''}: ${extras.join(' ')}${hint}`)
 }
+// Only a pre* bump reads --preid. Anywhere else it was accepted and dropped, so
+// `auto --preid beta` released a stable version to the `latest` dist-tag.
+if (requestedPreid !== undefined && !target?.startsWith('pre')) {
+  abort(
+    `--preid only applies to prepatch, preminor, premajor and prerelease, not ${target ? `"${target}"` : 'a release with no target'}.\n` +
+      `  For a ${requestedPreid} prerelease: release-kit prerelease --preid ${requestedPreid}`,
+  )
+}
 
 // ─────────────────────────────────────────────────────────────────────────────
 // SETUP

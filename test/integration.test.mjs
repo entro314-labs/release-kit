@@ -442,6 +442,19 @@ describe('steps', () => {
     })
   }
 
+  it('refuses --preid where no prerelease bump would read it', () => {
+    // auto and the stable bumps dropped it, releasing a stable version to latest.
+    const repo = makeRepo()
+    for (const args of [['auto'], ['minor'], []]) {
+      const { status, stdout } = release(repo, ['next', ...args, '--preid', 'beta'])
+      assert.equal(status, 1, stdout)
+      assert.match(stdout, /--preid only applies to prepatch, preminor, premajor and prerelease/)
+    }
+    const { status, stdout } = release(repo, ['next', 'prerelease', '--preid', 'beta'])
+    assert.equal(status, 0, stdout)
+    assert.equal(stdout.trim(), '1.0.1-beta.0')
+  })
+
   it('does not mistake a flag value for the release target', () => {
     const repo = makeRepo({ changelog: CHANGELOG })
     const { status, stdout } = release(repo, ['--only', 'tag,push', '--yes'])

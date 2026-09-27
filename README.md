@@ -186,22 +186,22 @@ Prerelease bumps need `--preid` unless the current version already carries one t
 
 ### Flags
 
-| Flag                         | Effect                                                                        |
-| ---------------------------- | ----------------------------------------------------------------------------- |
-| `--only <steps>`             | Run only these steps, comma-separated.                                        |
-| `--skip <steps>`             | Run every step except these.                                                  |
-| `--commit`                   | Force the `commit` step on when a `steps` config removed it.                  |
-| `--dry-run`                  | Print every step, execute nothing. Preflight still runs and still reports.    |
-| `--yes`, `-y`                | Skip the confirmation prompt.                                                 |
-| `--preid <id>`               | Prerelease identifier: `alpha`, `beta`, `rc`, `next`, `nightly`, `canary`.    |
-| `--dist-tag <name>`          | Override the npm dist-tag. Always wins over the derived one.                  |
-| `--notes <source>`           | Where notes come from: `auto`, `changelog`, `assistant`, `commits`, `github`. |
-| `--notes-file <path>`        | Write the resolved notes to a file for the next tool — see `notesFile`.       |
-| `--assistant <name>`         | Drafting CLI: `auto`, `none`, `claude`, `codex`.                              |
-| `--assistant-model <name>`   | Model the assistant runs with.                                                |
-| `--assistant-effort <level>` | Reasoning effort the assistant runs with.                                     |
-| `--sync <dir>...`            | Copy this script into other projects and exit. Touches no git state.          |
-| `--help`, `-h`               | Full flag list.                                                               |
+| Flag                         | Effect                                                                                       |
+| ---------------------------- | -------------------------------------------------------------------------------------------- |
+| `--only <steps>`             | Run only these steps, comma-separated.                                                       |
+| `--skip <steps>`             | Run every step except these.                                                                 |
+| `--commit`                   | Force the `commit` step on when a `steps` config removed it.                                 |
+| `--dry-run`                  | Print every step, execute nothing. Preflight still runs and still reports.                   |
+| `--yes`, `-y`                | Skip the confirmation prompt.                                                                |
+| `--preid <id>`               | Prerelease identifier for a `pre*` bump: `alpha`, `beta`, `rc`, `next`, `nightly`, `canary`. |
+| `--dist-tag <name>`          | Override the npm dist-tag. Always wins over the derived one.                                 |
+| `--notes <source>`           | Where notes come from: `auto`, `changelog`, `assistant`, `commits`, `github`.                |
+| `--notes-file <path>`        | Write the resolved notes to a file for the next tool — see `notesFile`.                      |
+| `--assistant <name>`         | Drafting CLI: `auto`, `none`, `claude`, `codex`.                                             |
+| `--assistant-model <name>`   | Model the assistant runs with.                                                               |
+| `--assistant-effort <level>` | Reasoning effort the assistant runs with.                                                    |
+| `--sync <dir>...`            | Copy this script into other projects and exit. Touches no git state.                         |
+| `--help`, `-h`               | Full flag list.                                                                              |
 
 ### Linting commits
 

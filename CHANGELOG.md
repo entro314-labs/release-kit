@@ -30,6 +30,9 @@ All notable changes to @entro314labs/release-kit.
 - **A failed `minor` (or any named bump) says how to finish it.** The mid-release error told
   every run to "re-run the same command", which preflight then refuses for a relative bump.
   It now says to re-run with no target, or `auto`.
+- **`--preid` is refused where it does nothing.** Only the `pre*` bumps read it; `auto`,
+  `patch`, `minor`, `major` and no target dropped it, so `auto --preid beta` released a
+  stable version to the `latest` dist-tag.
 
 ## [2.10.0] - 2026-09-26
 
