@@ -483,7 +483,9 @@ version the dead run already wrote: `minor` after a dead `minor` would release `
 from the commit `v1.1.0` already tags. Preflight refuses both shapes of that — the bump
 written but never committed, and the tag at `HEAD` that never reached the registry — and
 names the command that finishes the earlier release: `release-kit 1.1.0`, or no target, or
-`auto`.
+`auto`. With `"publish": null` there is no registry to ask, so a tag at `HEAD` that the
+remote does not have marks the unfinished release instead: a push that was refused is
+finished by `auto` too, and a relative bump over it is refused the same way.
 
 ### A release that was never published
 

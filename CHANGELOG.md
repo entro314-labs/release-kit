@@ -22,6 +22,11 @@ All notable changes to @entro314labs/release-kit.
   `"tagPrefix": null` tagged and pushed `null1.1.0`, and a string where an array belongs
   (`versionFiles`, `ignoreCommits`, `assets`) crashed with a TypeError or was read one
   character at a time. Every known key is now checked, and all mismatches are listed at once.
+- **A release with no registry is finished after a refused push, not released over.** With
+  `"publish": null` nothing could say the release was unfinished, so after a push the remote
+  refused, `auto` stopped with "no releasable commits" and a re-run `minor` released a second
+  version from the same commit. A tag at `HEAD` that the remote does not have now counts as
+  unfinished when no registry can answer: `auto` finishes it, and a relative bump is refused.
 
 ## [2.10.0] - 2026-09-26
 

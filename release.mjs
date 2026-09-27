@@ -2772,9 +2772,35 @@ function versionShipped(v) {
  */
 function unfinishedRelease() {
   const [newest] = releaseTags()
-  if (!newest || versionShipped(newest.version) !== false) return null
+  if (!newest) return null
   const at = tryRead('git', ['rev-list', '-n', '1', newest.name])
-  return at && at === tryRead('git', ['rev-parse', 'HEAD']) ? newest : null
+  if (!at || at !== tryRead('git', ['rev-parse', 'HEAD'])) return null
+  const shipped = versionShipped(newest.version)
+  if (shipped === false) return { ...newest, missing: 'the registry' }
+  // With no registry to ask — `publish: null`, or one that could not answer — the push is
+  // the last step that leaves a mark to check. A tag at HEAD the remote does not have is a
+  // release that died before or during the push.
+  if (shipped === null && runs('push') && tagOnRemote(newest.name) === false) {
+    return { ...newest, missing: config.remote }
+  }
+  return null
+}
+
+/**
+ * Whether the remote has this tag: false only when it answered without it, null when it
+ * could not be asked.
+ *
+ * @param {string} name
+ * @returns {boolean | null}
+ */
+function tagOnRemote(name) {
+  try {
+    read('git', ['ls-remote', '--exit-code', '--tags', config.remote, `refs/tags/${name}`])
+    return true
+  } catch (err) {
+    // --exit-code exits 2 for "no matching refs"; anything else is the remote not answering.
+    return err.status === 2 ? false : null
+  }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -2791,6 +2817,8 @@ let autoBump = null
 
 /** The tag of a previous release this run is finishing rather than starting. */
 let resuming = null
+/** What that release never reached: the registry, or the remote. */
+let resumingMissing = null
 
 /**
  * A release tagged at HEAD that never reached the registry, found while resolving a
@@ -2827,7 +2855,7 @@ if (!target) {
   }
   const pending = wouldCommitMore ? null : unfinishedRelease()
   if (pending) {
-    ;({ name: resuming, version } = pending)
+    ;({ name: resuming, version, missing: resumingMissing } = pending)
   } else {
     const { commits, lastTag } = commitsSinceLastTag({ shipped: true })
     if (!commits.length) {
@@ -3001,12 +3029,12 @@ if (autoBump) {
 }
 
 if (resuming) {
-  ok(`finishing ${resuming}: it was tagged and pushed, but never reached the registry`)
+  ok(`finishing ${resuming}: it was tagged, but never reached ${resumingMissing}`)
 }
 
 if (unfinishedAtHead) {
   fail(
-    `${unfinishedAtHead.name} is tagged at HEAD but never reached the registry, and a ` +
+    `${unfinishedAtHead.name} is tagged at HEAD but never reached ${unfinishedAtHead.missing}, and a ` +
       `${target} bump would release ${version} from the same commit and leave it that way.\n` +
       `       Finish it instead: re-run with no target, or with auto.`,
   )

@@ -6,7 +6,7 @@
  */
 import assert from 'node:assert/strict'
 import { execFileSync } from 'node:child_process'
-import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, it } from 'node:test'
@@ -65,6 +65,53 @@ describe('re-running a release', () => {
     assert.equal(status, 0, stdout)
     assert.match(stdout, /already exists at HEAD/)
     assert.match(stdout, /already published/)
+  })
+
+  describe('with no registry, after the push was refused', () => {
+    // publish: null has no registry to ask whether the release finished, so an unpushed
+    // tag at HEAD is what marks it. `auto` refused with "nothing to release", and a named
+    // bump released a second version on top of the first.
+    const pushRefused = () => {
+      const repo = makeRepo({
+        config: { publish: null, steps: ['version', 'changelog', 'tag', 'push'] },
+        changelog: CHANGELOG,
+      })
+      const hook = join(repo.remote, 'hooks', 'update')
+      writeFileSync(hook, '#!/bin/sh\n[ "$1" = refs/heads/main ] && exit 1\nexit 0\n')
+      chmodSync(hook, 0o755)
+      const first = release(repo, ['minor', '--yes'])
+      assert.notEqual(first.status, 0, first.stdout)
+      assert.deepEqual(tagsOnRemote(repo), [])
+      rmSync(hook)
+      return repo
+    }
+
+    it('finishes the release on auto', () => {
+      const repo = pushRefused()
+      const { status, stdout } = release(repo, ['auto', '--yes'])
+      assert.equal(status, 0, stdout)
+      assert.match(stdout, /finishing v1\.1\.0: it was tagged, but never reached origin/)
+      assert.deepEqual(tagsOnRemote(repo), ['v1.1.0'])
+    })
+
+    it('refuses a named bump that would release past it', () => {
+      const repo = pushRefused()
+      const { status, stdout } = release(repo, ['minor', '--yes'])
+      assert.equal(status, 1, stdout)
+      assert.match(stdout, /v1\.1\.0 is tagged at HEAD but never reached origin/)
+      assert.deepEqual(tagsOnRemote(repo), [])
+    })
+
+    it('still lets a pushed release be followed by a bump from the same commit', () => {
+      const repo = makeRepo({
+        config: { publish: null, steps: ['version', 'changelog', 'tag', 'push'] },
+        changelog: CHANGELOG,
+      })
+      assert.equal(release(repo, ['minor', '--yes']).status, 0)
+      const { status, stdout } = release(repo, ['patch', '--yes'])
+      assert.equal(status, 0, stdout)
+      assert.deepEqual(tagsOnRemote(repo), ['v1.1.0', 'v1.1.1'])
+    })
   })
 
   it('does not file commit-derived notes a second time when finishing a release', () => {
