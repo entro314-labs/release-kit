@@ -66,6 +66,29 @@ describe('re-running a release', () => {
     assert.match(stdout, /already exists at HEAD/)
     assert.match(stdout, /already published/)
   })
+
+  it('does not file commit-derived notes a second time when finishing a release', () => {
+    // A named notes source drafts again on the resume. Filing that draft duplicated the
+    // section and made a commit past the reused tag, which publish then sent.
+    const repo = makeRepo({
+      config: { notes: 'commits' },
+      changelog: '# Changelog\n\n## [Unreleased]\n',
+    })
+    const git = (...args) => execFileSync('git', args, { cwd: repo.root, encoding: 'utf8' }).trim()
+    git('tag', '-a', 'v1.0.0', '-m', 'v1.0.0')
+    git('push', '-q', 'origin', 'v1.0.0')
+    writeFileSync(join(repo.root, 'a.txt'), 'a\n')
+    git('add', 'a.txt')
+    git('commit', '-qm', 'feat: add a')
+    const env = { NPM_PUBLISHED_VERSIONS: '1.0.0', NPM_REACHABLE: '0' }
+    const first = release(repo, ['auto', '--yes'], { ...env, NPM_PUBLISH_FAILS: '1' })
+    assert.notEqual(first.status, 0, first.stdout)
+
+    const { status, stdout } = release(repo, ['auto', '--yes'], env)
+    assert.equal(status, 0, stdout)
+    assert.equal(git('rev-list', '-n1', 'v1.1.0'), git('rev-parse', 'HEAD'))
+    assert.equal(readFile(repo, 'CHANGELOG.md').match(/^## \[1\.1\.0\]/gm)?.length, 1)
+  })
 })
 
 describe('preflight', () => {

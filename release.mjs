@@ -1495,6 +1495,10 @@ function candidateSections(text, version) {
 /** The `## ` heading offsets in a changelog, in file order. */
 const sectionOffsets = (text) => [...text.matchAll(/^## .*$/gm)].map((m) => m.index)
 
+/** True when the changelog already has a `## [version]` heading, empty body or not. */
+const hasVersionHeading = (text, version) =>
+  new RegExp(`^##\\s+\\[?v?${escapeRe(version)}\\]?(?![\\w.-])`, 'm').test(text)
+
 /**
  * Place a version's section where it belongs: above the first section whose version is
  * lower, rather than wherever the file happens to start.
@@ -1603,7 +1607,7 @@ function withChangelogLinks(text, links, tagPrefix = '') {
 function rollUnreleased(text, version, date) {
   // A heading for this version already exists — possibly with an empty body, which
   // `changelogSection` reports as absent. Rolling again would duplicate the heading.
-  if (new RegExp(`^##\\s+\\[?v?${escapeRe(version)}\\]?(?![\\w.-])`, 'm').test(text)) return null
+  if (hasVersionHeading(text, version)) return null
 
   const heading = /^##\s+\[?Unreleased\]?[^\n]*$/im
   const match = heading.exec(text)
@@ -3781,6 +3785,16 @@ for (const asset of config.assets) {
   else fail(`asset ${asset} does not exist`)
 }
 
+/**
+ * Whether drafted notes still have to be filed in the changelog. A named source (`commits`,
+ * `assistant`) drafts even when the section exists — a resume, or one written by hand — and
+ * filing it again would duplicate the heading and commit past a reused tag.
+ */
+const draftedSectionMissing = () =>
+  !!config.changelog &&
+  existsSync(config.changelog) &&
+  !hasVersionHeading(readFileSync(config.changelog, 'utf8'), version)
+
 // Reusing a tag is the resume path, and a resume writes nothing. If this run would still
 // produce a commit, that commit moves HEAD past the tag and the release ends up tagged at
 // the wrong revision — which is silent until someone checks out the tag, and worse for the
@@ -3791,6 +3805,7 @@ const wouldCommit = [
   // The roll is computed whenever [Unreleased] is populated, because the notes come from
   // it either way; it is only written — and only becomes a commit — when the step runs.
   rolledChangelog && runs('changelog') && 'a changelog entry',
+  draftedNotes && runs('changelog') && draftedSectionMissing() && 'a drafted changelog section',
 ].filter(Boolean)
 if (taggedCommit && runs('tag') && wouldCommit.length) {
   fail(
@@ -3953,7 +3968,7 @@ if (rolledChangelog && runs('changelog')) {
   if (dryRun) console.log(`  ${yellow('would write')} ${config.changelog}`)
   else writeFileSync(config.changelog, linked(rolledChangelog))
   staged.push(config.changelog)
-} else if (runs('changelog') && draftedNotes && config.changelog && existsSync(config.changelog)) {
+} else if (runs('changelog') && draftedNotes && draftedSectionMissing()) {
   step(`Add the drafted ${version} section to ${config.changelog}`)
   if (dryRun) console.log(`  ${yellow('would write')} ${config.changelog}`)
   else {

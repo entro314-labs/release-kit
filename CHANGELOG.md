@@ -11,6 +11,12 @@ All notable changes to @entro314labs/release-kit.
   "atomic" as a server that cannot do atomic pushes. It then retried without `--atomic`, so
   when `main` had moved on the remote the tag was pushed without its commit and could start
   a tag-triggered build. Only the server's "does not support --atomic" message falls back now.
+- **Finishing a release with `notes: "commits"` or `"assistant"` no longer files its notes
+  twice.** A named notes source drafts again on the re-run, and that draft was inserted under
+  a second `## [x.y.z]` heading and committed, moving HEAD past the reused tag, pushing that
+  commit and publishing a tree the tag did not describe. A drafted section is now filed only
+  when the changelog has no heading for the version, which also stops a hand-written section
+  from being duplicated on a first run.
 
 ## [2.10.0] - 2026-09-26
 
