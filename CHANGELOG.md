@@ -27,6 +27,9 @@ All notable changes to @entro314labs/release-kit.
   refused, `auto` stopped with "no releasable commits" and a re-run `minor` released a second
   version from the same commit. A tag at `HEAD` that the remote does not have now counts as
   unfinished when no registry can answer: `auto` finishes it, and a relative bump is refused.
+- **A failed `minor` (or any named bump) says how to finish it.** The mid-release error told
+  every run to "re-run the same command", which preflight then refuses for a relative bump.
+  It now says to re-run with no target, or `auto`.
 
 ## [2.10.0] - 2026-09-26
 

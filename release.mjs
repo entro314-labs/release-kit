@@ -297,9 +297,15 @@ function abort(message, title = 'RELEASE ABORTED') {
  * the real cause under a Node stack trace.
  */
 function abortMidRelease(commandLine) {
+  // A relative bump re-run as-is would count from the version this run already wrote, and
+  // preflight refuses it; what finishes the release is the version itself, or no target.
+  const rerun =
+    target && target !== 'auto' && BUMPS.has(target)
+      ? 're-run with no target (or `auto`)'
+      : 're-run the same command'
   abort(
     `\`${commandLine}\` failed — see its output above.\n\n` +
-      '  The release stopped partway through. Fix the cause and re-run the same command:\n' +
+      `  The release stopped partway through. Fix the cause and ${rerun}:\n` +
       '  the steps that already completed are detected and skipped.',
   )
 }

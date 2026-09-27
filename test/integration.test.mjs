@@ -94,6 +94,18 @@ describe('re-running a release', () => {
       assert.deepEqual(tagsOnRemote(repo), ['v1.1.0'])
     })
 
+    it('tells a named bump to finish with no target, not to re-run itself', () => {
+      const repo = makeRepo({
+        config: { publish: null, steps: ['version', 'changelog', 'tag', 'push'] },
+        changelog: CHANGELOG,
+      })
+      const hook = join(repo.remote, 'hooks', 'update')
+      writeFileSync(hook, '#!/bin/sh\nexit 1\n')
+      chmodSync(hook, 0o755)
+      const { stdout } = release(repo, ['minor', '--yes'])
+      assert.match(stdout, /re-run with no target \(or `auto`\)/)
+    })
+
     it('refuses a named bump that would release past it', () => {
       const repo = pushRefused()
       const { status, stdout } = release(repo, ['minor', '--yes'])
