@@ -33,6 +33,9 @@ All notable changes to @entro314labs/release-kit.
 - **`--preid` is refused where it does nothing.** Only the `pre*` bumps read it; `auto`,
   `patch`, `minor`, `major` and no target dropped it, so `auto --preid beta` released a
   stable version to the `latest` dist-tag.
+- **`release-kit next` keeps an abort off stdout.** Only the version is meant to reach
+  stdout, so `VERSION=$(release-kit next …)` substitutes cleanly, but an abort printed there
+  and was captured as the "version". It now goes to stderr with the rest of the narration.
 
 ## [2.10.0] - 2026-09-26
 

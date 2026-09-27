@@ -286,7 +286,9 @@ const formatStatus = (porcelain) =>
     .join('\n')
 
 function abort(message, title = 'RELEASE ABORTED') {
-  console.log(`\n${red(bold(title))} — ${message}\n`)
+  // Through `say`: under `next`, stdout carries the version alone, and an abort captured by
+  // `$(...)` would otherwise become the "version".
+  say(`\n${red(bold(title))} — ${message}\n`)
   process.exit(1)
 }
 

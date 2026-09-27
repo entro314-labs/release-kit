@@ -5,7 +5,7 @@
  * HEAD, a changelog rolled twice, a Python project reaching for npm.
  */
 import assert from 'node:assert/strict'
-import { execFileSync } from 'node:child_process'
+import { execFileSync, spawnSync } from 'node:child_process'
 import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -441,6 +441,17 @@ describe('steps', () => {
       assert.deepEqual(tagsOnRemote(repo), [])
     })
   }
+
+  it('keeps an abort under next off stdout, where $(...) would take it for the version', () => {
+    const repo = makeRepo()
+    const result = spawnSync('node', [RELEASE_MJS, 'next', 'bogus'], {
+      cwd: repo.root,
+      encoding: 'utf8',
+    })
+    assert.equal(result.status, 1)
+    assert.equal(result.stdout, '')
+    assert.match(result.stderr, /RELEASE ABORTED/)
+  })
 
   it('refuses --preid where no prerelease bump would read it', () => {
     // auto and the stable bumps dropped it, releasing a stable version to latest.
