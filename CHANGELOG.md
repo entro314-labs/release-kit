@@ -4,6 +4,14 @@ All notable changes to @entro314labs/release-kit.
 
 ## [Unreleased]
 
+### Fixed
+
+- **A push the remote rejected no longer sends the tag on its own.** git reports a refused
+  ref in an atomic push as "atomic push failed", and release-kit read any mention of
+  "atomic" as a server that cannot do atomic pushes. It then retried without `--atomic`, so
+  when `main` had moved on the remote the tag was pushed without its commit and could start
+  a tag-triggered build. Only the server's "does not support --atomic" message falls back now.
+
 ## [2.10.0] - 2026-09-26
 
 ### Added

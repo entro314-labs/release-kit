@@ -1487,6 +1487,47 @@ describe('pushing the commit and the tag', () => {
     assert.match(stdout, /git push --follow-tags --atomic origin main/)
     assert.deepEqual(tagsOnRemote(repo), ['v1.1.0'])
   })
+
+  it('does not retry a rejected atomic push one ref at a time', () => {
+    // git's own rejection says "(atomic push failed)". Reading that as "the server cannot
+    // do atomic pushes" sent the tag alone after the branch was refused.
+    const repo = makeRepo({ config: { publish: null, steps: ['version', 'tag', 'push'] } })
+    const other = `${repo.root}-other`
+    execFileSync('git', ['clone', '-q', repo.remote, other])
+    const git = (...args) => execFileSync('git', args, { cwd: other })
+    git('config', 'user.email', 'other@example.com')
+    git('config', 'user.name', 'Other')
+    git('config', 'commit.gpgsign', 'false')
+    writeFileSync(join(other, 'b.txt'), 'b\n')
+    git('add', 'b.txt')
+    git('commit', '-qm', 'fix: land first')
+    // Pushed from the hook, so preflight's fetch saw a remote the release was not behind.
+    writeFileSync(
+      join(repo.root, 'release.config.json'),
+      JSON.stringify({
+        publish: null,
+        steps: ['version', 'tag', 'push'],
+        hooks: { beforeVersion: `git -C '${other}' push -q origin main` },
+      }),
+    )
+    execFileSync('git', ['commit', '-qam', 'chore: config'], { cwd: repo.root })
+    execFileSync('git', ['push', '-q', 'origin', 'main'], { cwd: repo.root })
+    execFileSync('git', ['pull', '-q', '--rebase', 'origin', 'main'], { cwd: other })
+
+    const { status, stdout } = release(repo, ['minor', '--yes'])
+    assert.notEqual(status, 0, stdout)
+    assert.deepEqual(tagsOnRemote(repo), [])
+    assert.doesNotMatch(stdout, /does not support atomic pushes/)
+  })
+
+  it('falls back to a plain push on a server without the atomic capability', () => {
+    const repo = makeRepo({ config: { publish: null, steps: ['version', 'tag', 'push'] } })
+    execFileSync('git', ['--git-dir', repo.remote, 'config', 'receive.advertiseAtomic', 'false'])
+    const { status, stdout } = release(repo, ['minor', '--yes'])
+    assert.equal(status, 0, stdout)
+    assert.match(stdout, /does not support atomic pushes/)
+    assert.deepEqual(tagsOnRemote(repo), ['v1.1.0'])
+  })
 })
 
 describe('changelog link definitions', () => {

@@ -1281,7 +1281,9 @@ function pushBranchAndTag(branchRef) {
   } catch (err) {
     const stderr = `${err.stderr ?? ''}`
     process.stderr.write(stderr)
-    if (!/atomic/i.test(stderr)) abortMidRelease(line)
+    // Only the capability refusal falls back. git's rejection of a ref also names atomic
+    // ("atomic push failed"), and that one must stop here.
+    if (!/does not support --atomic/i.test(stderr)) abortMidRelease(line)
   }
   warn(
     `${config.remote} does not support atomic pushes — sending the branch and tag in one ` +
