@@ -10,7 +10,7 @@
 [![downloads](https://img.shields.io/npm/dm/@entro314labs/release-kit?color=cb3837)](https://www.npmjs.com/package/@entro314labs/release-kit)
 [![unpacked size](https://img.shields.io/npm/unpacked-size/@entro314labs/release-kit?color=blueviolet)](https://www.npmjs.com/package/@entro314labs/release-kit?activeTab=code)
 [![dependencies](https://img.shields.io/badge/dependencies-0-brightgreen)](#-requirements)
-[![node](https://img.shields.io/badge/node-%E2%89%A5%2022-339933?logo=node.js&logoColor=white)](#-requirements)
+[![node](https://img.shields.io/badge/node-%E2%89%A5%2024-339933?logo=node.js&logoColor=white)](#-requirements)
 [![license](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
 
 </div>
@@ -127,7 +127,7 @@ Pin the URL to a tag, never `main`: piping an unpinned remote script into an int
 means whatever is at that URL runs against your repository and your credentials. `--sync` is
 the one thing that does not work this way — copying itself needs a file on disk.
 
-> **All five paths run the same file and need Node 22+.** That includes the Rust, Python and
+> **All five paths run the same file and need Node 24+.** That includes the Rust, Python and
 > Go projects: `release-kit` is a Node program regardless of what it is releasing.
 
 Zero-config works on the conventions below; add a [`release.config.json`](#️-configuration)
@@ -1200,13 +1200,13 @@ npx @entro314labs/release-kit --sync ../project-a ../project-b
 ```
 
 It reports `installed`, `updated`, or `already up to date` per target, creates `scripts/`
-if missing, skips directories with no `package.json`, and warns when a target lacks the
-`release` npm script. It runs before any git resolution, so it works from anywhere,
+if missing, skips a directory that does not exist, and warns when a target with a
+`package.json` lacks the `release` npm script. It runs before any git resolution, so it works from anywhere,
 including a directory that is not a repository.
 
 ## 📋 Requirements
 
-- **Node 22+ — including for Rust, Python and Go projects.** `release-kit` is a Node
+- **Node 24+ — including for Rust, Python and Go projects.** `release-kit` is a Node
   program whatever it releases; there is no standalone binary.
 - `git`
 - `gh`, authenticated — only when creating GitHub releases
@@ -1222,7 +1222,7 @@ with the reasoning — are in [ROADMAP.md](ROADMAP.md).
 
 ```sh
 pnpm install
-pnpm test     # 188 tests, node --test, no framework
+pnpm test     # node --test, no framework
 pnpm check    # format + lint + tests, the same gate CI runs
 ```
 
