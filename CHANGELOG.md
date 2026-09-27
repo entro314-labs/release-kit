@@ -17,6 +17,11 @@ All notable changes to @entro314labs/release-kit.
   commit and publishing a tree the tag did not describe. A drafted section is now filed only
   when the changelog has no heading for the version, which also stops a hand-written section
   from being duplicated on a first run.
+- **A config key of the wrong type is refused before anything runs.** Only unknown keys were
+  checked, so `"steps": "version,tag,push"` ran no step and still printed "Released",
+  `"tagPrefix": null` tagged and pushed `null1.1.0`, and a string where an array belongs
+  (`versionFiles`, `ignoreCommits`, `assets`) crashed with a TypeError or was read one
+  character at a time. Every known key is now checked, and all mismatches are listed at once.
 
 ## [2.10.0] - 2026-09-26
 

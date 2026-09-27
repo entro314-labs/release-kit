@@ -763,8 +763,9 @@ execution is not wired up yet.
 
 ## ⚙️ Configuration
 
-`release.config.json`, beside `package.json`. Every key is optional; unknown keys abort
-rather than being silently ignored.
+`release.config.json`, beside `package.json`. Every key is optional; unknown keys, and known
+keys holding the wrong type (a string where the table says array), abort rather than being
+silently ignored.
 
 | Key             | Default                | Meaning                                                                 |
 | --------------- | ---------------------- | ----------------------------------------------------------------------- |

@@ -362,6 +362,27 @@ describe('steps', () => {
     assert.match(stdout, /unknown step\(s\): pubish/)
   })
 
+  for (const [key, value] of [
+    ['steps', 'version,tag,push'],
+    ['tagPrefix', null],
+    ['versionFiles', 'VERSION'],
+    ['ignoreCommits', '^wip'],
+    ['assets', 'dist/app.tgz'],
+    ['versioning', 'always-pach'],
+    ['hiddenTypes', 'chore'],
+    ['requireGreen', 'yes'],
+    ['hooks', { afterRelease: ['echo', 'done'] }],
+  ]) {
+    it(`refuses ${key} of the wrong type before anything runs`, () => {
+      const repo = makeRepo({ config: { [key]: value } })
+      const { status, stdout } = release(repo, ['minor', '--yes'])
+      assert.equal(status, 1, stdout)
+      assert.match(stdout, new RegExp(`${key} must be `))
+      assert.doesNotMatch(stdout, /TypeError/)
+      assert.deepEqual(tagsOnRemote(repo), [])
+    })
+  }
+
   it('does not mistake a flag value for the release target', () => {
     const repo = makeRepo({ changelog: CHANGELOG })
     const { status, stdout } = release(repo, ['--only', 'tag,push', '--yes'])

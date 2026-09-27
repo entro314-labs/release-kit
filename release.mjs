@@ -2256,6 +2256,56 @@ const userConfig = readUserConfig()
 const config = { ...DEFAULTS, ...userConfig }
 const unknownKeys = Object.keys(config).filter((key) => !(key in DEFAULTS))
 if (unknownKeys.length) abort(`release.config.json has unknown keys: ${unknownKeys.join(', ')}`)
+
+/**
+ * What each key has to hold. A known key with the wrong shape was accepted and then read as
+ * if it were right: `"steps": "tag,push"` ran no step at all and still reported a release,
+ * `"tagPrefix": null` tagged `null1.1.0`, and a string where an array belongs crashed with a
+ * TypeError after the tag was pushed.
+ */
+const isString = (value) => typeof value === 'string'
+const isStringOrNull = (value) => value === null || isString(value)
+const isStringArray = (value) => Array.isArray(value) && value.every(isString)
+const isObject = (value) => !!value && typeof value === 'object' && !Array.isArray(value)
+const CONFIG_SHAPES = {
+  steps: [isStringArray, 'an array of step names'],
+  tagPrefix: [isString, 'a string'],
+  branch: [isStringOrNull, 'a string, or null'],
+  remote: [isString, 'a string'],
+  changelog: [isStringOrNull, 'a string, or null'],
+  versionFile: [
+    (v) => v === undefined || isStringOrNull(v) || isObject(v),
+    'a path, an object, or null',
+  ],
+  versionFiles: [
+    (v) => Array.isArray(v) && v.every((f) => isString(f) || (isObject(f) && isString(f.path))),
+    'an array of paths or { path, pattern } objects',
+  ],
+  publish: [
+    (v) => v === undefined || isStringOrNull(v) || isStringArray(v),
+    'a command, an array of commands, or null',
+  ],
+  commitMessage: [isString, 'a string'],
+  releaseTitle: [isString, 'a string'],
+  assets: [isStringArray, 'an array of paths'],
+  assistant: [(v) => isStringOrNull(v) || isObject(v), 'a name, an object, or null'],
+  notesFile: [isStringOrNull, 'a path, or null'],
+  versioning: [
+    (v) => ['conventional', 'always-patch', 'always-minor', 'always-major'].includes(v),
+    'one of conventional, always-patch, always-minor, always-major',
+  ],
+  notes: [isString, 'a string'],
+  hiddenTypes: [isStringArray, 'an array of commit types'],
+  ignoreCommits: [isStringArray, 'an array of regexes'],
+  verify: [isStringOrNull, 'a command, or null'],
+  requireGreen: [(v) => typeof v === 'boolean', 'true or false'],
+  hooks: [(v) => isObject(v) && Object.values(v).every(isString), 'an object of command strings'],
+}
+const misshapen = Object.entries(CONFIG_SHAPES)
+  .filter(([key, [valid]]) => !valid(config[key]))
+  .map(([key, [, expected]]) => `  ${key} must be ${expected}, not ${JSON.stringify(config[key])}`)
+if (misshapen.length)
+  abort(`release.config.json has keys of the wrong type:\n${misshapen.join('\n')}`)
 // A misspelled hook name is a hook that silently never runs, which is the failure mode
 // this file refuses everywhere else it takes a name.
 const unknownHooks = Object.keys(config.hooks ?? {}).filter((key) => !HOOKS.includes(key))
