@@ -4,6 +4,8 @@ All notable changes to @entro314labs/release-kit.
 
 ## [Unreleased]
 
+## [2.11.0] - 2026-09-28
+
 ### Added
 
 - **`release-train` releases.** Until now it planned and preflighted a train and stopped.
@@ -869,7 +871,8 @@ null` now means "no publish command configured" rather than "skip publishing", a
 - **`--sync`** to vendor the script into projects that should not depend on the registry
   they are about to publish to.
 
-[Unreleased]: https://github.com/entro314-labs/release-kit/compare/v2.10.0...HEAD
+[Unreleased]: https://github.com/entro314-labs/release-kit/compare/v2.11.0...HEAD
+[2.11.0]: https://github.com/entro314-labs/release-kit/compare/v2.10.0...v2.11.0
 [2.10.0]: https://github.com/entro314-labs/release-kit/compare/v2.9.4...v2.10.0
 [2.9.4]: https://github.com/entro314-labs/release-kit/compare/v2.9.3...v2.9.4
 [2.9.3]: https://github.com/entro314-labs/release-kit/compare/v2.9.2...v2.9.3
