@@ -16,8 +16,9 @@ All notable changes to @entro314labs/release-kit.
   started; running the same command again resumes. `publish: false` members release
   without publishing, and `--assistant none` reaches every package. The npm or pnpm
   lockfile that records a moved range is refreshed into the same commit (a yarn or bun
-  lockfile is refused in preflight instead of being committed stale), and `--offline` is
-  refused outside `--dry-run`.
+  lockfile is refused in preflight instead of being committed stale), a member with
+  `requireGreen` is refused in preflight when the train commits to its repository before
+  its turn, and `--offline` is refused outside `--dry-run`.
 - **`--package` releases one package of several in a repository.** Run in the package's
   directory, it uses that directory's config, manifest, changelog, `verify` and publish,
   limits the commits it reads and the working tree it checks and commits to the directory,
