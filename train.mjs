@@ -4,9 +4,8 @@
  *
  * Implements TRAIN.md's pipeline — discover → graph → detect changes → cascade → plan →
  * preflight → execute → report — plus `seed-tags`, which establishes baseline release tags.
- * Execution runs the release-kit beside this file once per package, in dependency order.
- * A package that shares its git repository with other members is refused in preflight:
- * release-kit releases a repository, not a directory inside one.
+ * Execution runs the release-kit beside this file once per package, in dependency order; a
+ * package that shares its git repository with other members runs with `--package`.
  *
  *   train                    plan + preflight, confirm, release (--yes skips the prompt)
  *   train graph              print the derived dependency graph and topo order
@@ -388,8 +387,9 @@ export function discover(rootDir, config) {
       repoRelPath: repoDir ? relative(repoDir, dir) || '.' : null,
       publish: entry.publish !== false,
       branch: releaseConfig.branch === undefined ? 'main' : releaseConfig.branch,
-      // The prefix release-kit will tag with, and so the one its history is read under.
-      tagPrefix: releaseConfig.tagPrefix ?? 'v',
+      // The prefix release-kit will tag with, and so the one its history is read under;
+      // null when the package's config leaves it to the default (see tagPatternFor).
+      tagPrefix: releaseConfig.tagPrefix ?? null,
       ...manifest,
     })
   }
@@ -467,13 +467,12 @@ export function topoSort(orderEdges) {
 // ─────────────────────────────────────────────────────────────────────────────
 
 /**
- * Tag scheme: the package's own `tagPrefix` (`v` unless its release.config.json says
- * otherwise) when the repo owns exactly one member, `<name>@<version>` when it owns
- * several — which keeps single-package repos identical to standalone release-kit.
+ * Tag scheme: the package's own `tagPrefix` when its release.config.json sets one;
+ * otherwise `v` when the repo owns exactly one member, and `<name>@` when it owns several
+ * — the defaults release-kit itself tags with, standalone and under `--package`.
  */
 export function tagPatternFor(member, repoMemberCount) {
-  if (repoMemberCount > 1) return { prefix: `${member.name}@`, glob: `${member.name}@*` }
-  const prefix = member.tagPrefix ?? 'v'
+  const prefix = member.tagPrefix ?? (repoMemberCount > 1 ? `${member.name}@` : 'v')
   return { prefix, glob: `${prefix}*` }
 }
 
@@ -776,15 +775,26 @@ function preflight({
 
   for (const item of plan) {
     const { member, next } = item
-    // release-kit releases a repository: it reads the whole repository's commits, tags
-    // `<prefix><version>`, publishes from the root, and refuses a nested package outright.
-    // A member that shares its repository with others needs a per-directory release it
-    // does not have, so the train refuses it rather than releasing the wrong thing.
-    if ((repoMemberCounts.get(member.repoDir) ?? 1) > 1) {
+    // A member sharing its repository releases under --package, tagged `<name>@`; with no
+    // name and no configured prefix release-kit would stop at this package's turn.
+    if ((repoMemberCounts.get(member.repoDir) ?? 1) > 1 && !member.name && !member.tagPrefix) {
       failures.push(
-        `${item.id}: ${relative(rootDir, member.repoDir) || '.'} holds ${repoMemberCounts.get(member.repoDir)} train members — ` +
-          'release-kit releases a whole repository, so a package sharing one cannot be released by the train yet',
+        `${item.id}: shares ${relative(rootDir, member.repoDir) || '.'} with other members but has no package name to tag with — set "tagPrefix" in its release.config.json`,
       )
+    }
+    // Moving a range makes the lockfile that records it stale, and a frozen install in
+    // that repository's CI then fails. The train refreshes it — with the tool that owns it.
+    if (item.rewrites.some((r) => r.to)) {
+      const lock = findLockfile(member)
+      if (lock && !lock.tool) {
+        failures.push(
+          `${item.id}: ${lock.name} records the ranges the train rewrites, and the train cannot refresh it — use workspace: ranges or an npm/pnpm lockfile`,
+        )
+      } else if (lock && !toolAvailable(lock.tool)) {
+        failures.push(
+          `${item.id}: ${lock.name} has to be refreshed after its ranges move, and ${lock.tool} is not installed`,
+        )
+      }
     }
     if (!member.version) {
       warnings.push(
@@ -1141,6 +1151,47 @@ const RELEASE_KIT = join(dirname(fileURLToPath(import.meta.url)), 'release.mjs')
 const DEPENDENCY_MAPS = ['dependencies', 'peerDependencies', 'optionalDependencies']
 
 /**
+ * Lockfiles that record dependency ranges, nearest first, with the command that brings one
+ * back into step with its manifest. `tool: null` is a lockfile the train will not guess a
+ * refresh for; preflight refuses it rather than committing it stale.
+ */
+const LOCKFILES = [
+  {
+    name: 'pnpm-lock.yaml',
+    tool: 'pnpm',
+    args: ['install', '--lockfile-only', '--ignore-scripts'],
+  },
+  {
+    name: 'package-lock.json',
+    tool: 'npm',
+    args: ['install', '--package-lock-only', '--ignore-scripts'],
+  },
+  {
+    name: 'npm-shrinkwrap.json',
+    tool: 'npm',
+    args: ['install', '--package-lock-only', '--ignore-scripts'],
+  },
+  { name: 'yarn.lock', tool: null },
+  { name: 'bun.lock', tool: null },
+  { name: 'bun.lockb', tool: null },
+]
+
+/** The lockfile governing a member: in its directory, or up to its repository root (a workspace). */
+function findLockfile(member) {
+  let { dir } = member
+  for (;;) {
+    const lock = LOCKFILES.find(({ name }) => existsSync(join(dir, name)))
+    if (lock) return { ...lock, dir, path: join(dir, lock.name) }
+    if (!member.repoDir || dir === member.repoDir || dir === dirname(dir)) return null
+    dir = dirname(dir)
+  }
+}
+
+function toolAvailable(tool) {
+  return spawnSync(tool, ['--version'], { stdio: 'ignore', timeout: 20_000 }).status === 0
+}
+
+/**
  * A package.json with its internal ranges moved to the versions the train is releasing.
  * Every map that names the dependency is rewritten from its own current range, and
  * `workspace:` ranges are left to the package manager. Returns null when nothing changes —
@@ -1176,6 +1227,8 @@ export function rewriteManifest(text, targets, policy) {
  */
 export function releaseArgs(item, { noAssistant = false } = {}) {
   const args = [item.next ?? 'auto', '--yes']
+  // One member of several in its repository: release the directory, not the repository.
+  if (item.member.sharesRepo) args.push('--package')
   // `publish: false` in the train config: versioned, tagged and released, never published.
   if (!item.member.publish) args.push('--skip', 'publish')
   // `--assistant none` is the one assistant value forwarded: a whole-train kill switch.
@@ -1232,10 +1285,29 @@ function executePlan(plan, { rangePolicy, registryWait, noAssistant, env = proce
       const rewritten = rewriteManifest(readFileSync(manifestPath, 'utf8'), targets, rangePolicy)
       if (rewritten) {
         writeFileSync(manifestPath, rewritten.text)
+        const paths = [member.manifestFile]
+        const lock = findLockfile(member)
+        if (lock?.tool) {
+          const refresh = spawnSync(lock.tool, lock.args, {
+            cwd: lock.dir,
+            env,
+            encoding: 'utf8',
+            stdio: ['ignore', 'pipe', 'pipe'],
+          })
+          if (refresh.status !== 0) {
+            process.stderr.write(`${refresh.stdout}${refresh.stderr}`)
+            git(member.dir, ['checkout', '--', member.manifestFile], { allowFailure: true })
+            return stop(
+              item,
+              `\`${lock.tool} ${lock.args.join(' ')}\` failed refreshing ${lock.name}`,
+            )
+          }
+          paths.push(relative(member.dir, lock.path))
+        }
         const subject = `chore(deps): move ${rewritten.changed.join(', ')}`
         const committed =
-          git(member.dir, ['add', '--', member.manifestFile], { allowFailure: true }) !== null &&
-          git(member.dir, ['commit', '-m', subject, '--', member.manifestFile], {
+          git(member.dir, ['add', '--', ...paths], { allowFailure: true }) !== null &&
+          git(member.dir, ['commit', '-m', subject, '--', ...paths], {
             allowFailure: true,
           }) !== null
         if (!committed)
@@ -1398,6 +1470,7 @@ async function main() {
     if (member.repoDir)
       repoMemberCounts.set(member.repoDir, (repoMemberCounts.get(member.repoDir) ?? 0) + 1)
   }
+  for (const member of members) member.sharesRepo = (repoMemberCounts.get(member.repoDir) ?? 0) > 1
   const registry = gatherRegistry(members, args.offline)
 
   if (args.command === 'seed-tags') {

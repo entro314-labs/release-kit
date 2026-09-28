@@ -1604,6 +1604,78 @@ describe('the Latest badge on GitHub', () => {
   })
 })
 
+describe('--package: one package of several in a repository', () => {
+  const nested = (extra = {}) =>
+    makeRepo({
+      name: '@t/root',
+      config: { publish: null },
+      files: {
+        'packages/x/package.json': '{\n  "name": "@t/x",\n  "version": "1.0.0"\n}\n',
+        'packages/x/CHANGELOG.md': '# Changelog\n\n## [Unreleased]\n',
+        'packages/y/package.json': '{\n  "name": "@t/y",\n  "version": "3.0.0"\n}\n',
+        ...extra,
+      },
+    })
+  const commit = (repo, path, subject) => {
+    writeFileSync(join(repo.root, path), `${subject}\n`)
+    execFileSync('git', ['add', path], { cwd: repo.root })
+    execFileSync('git', ['commit', '-qm', subject], { cwd: repo.root })
+    execFileSync('git', ['push', '-q', 'origin', 'main'], { cwd: repo.root })
+  }
+  const inPackage = (repo, args, env = {}) =>
+    release({ ...repo, root: join(repo.root, 'packages/x') }, args, env)
+
+  it('still refuses a nested package without it, and names the flag', () => {
+    const repo = nested()
+    const { status, stdout } = inPackage(repo, ['minor', '--yes'])
+    assert.equal(status, 1, stdout)
+    assert.match(stdout, /packages\/x\/package\.json is a nested package/)
+    assert.match(stdout, /run with --package/)
+  })
+
+  it('versions, changelogs, tags and publishes the directory, and reads only its commits', () => {
+    const repo = nested()
+    commit(repo, 'packages/x/feature.txt', 'feat: x gains a feature')
+    commit(repo, 'packages/y/other.txt', 'feat: y gains something else')
+    const registry = `${repo.root}-registry.txt`
+    const { status, stdout } = inPackage(repo, ['auto', '--package', '--yes'], {
+      NPM_REGISTRY: registry,
+    })
+    assert.equal(status, 0, stdout)
+    assert.deepEqual(tagsOnRemote(repo), ['@t/x@1.1.0'])
+    assert.equal(JSON.parse(readFile(repo, 'packages/x/package.json')).version, '1.1.0')
+    assert.equal(JSON.parse(readFile(repo, 'packages/y/package.json')).version, '3.0.0')
+    assert.equal(JSON.parse(readFile(repo, 'package.json')).version, '1.0.0')
+    const changelog = readFile(repo, 'packages/x/CHANGELOG.md')
+    assert.match(changelog, /## \[1\.1\.0\]/)
+    assert.match(changelog, /x gains a feature/)
+    assert.doesNotMatch(changelog, /y gains something else/)
+  })
+
+  it('publishes from the package directory', () => {
+    const repo = nested({ 'packages/x/release.config.json': '{}\n' })
+    const registry = `${repo.root}-registry.txt`
+    const { status, stdout } = inPackage(repo, ['minor', '--package', '--yes'], {
+      NPM_REGISTRY: registry,
+    })
+    assert.equal(status, 0, stdout)
+    assert.equal(readFileSync(registry, 'utf8').trim(), '@t/x@1.1.0')
+  })
+
+  it('ignores, and leaves out of its commit, changes elsewhere in the repository', () => {
+    const repo = nested()
+    writeFileSync(join(repo.root, 'packages/y/wip.txt'), 'unfinished\n')
+    const { status, stdout } = inPackage(repo, ['patch', '--package', '--yes'])
+    assert.equal(status, 0, stdout)
+    assert.deepEqual(tagsOnRemote(repo), ['@t/x@1.0.1'])
+    const shipped = execFileSync('git', ['show', '--name-only', '--format=', 'HEAD'], {
+      cwd: repo.root,
+      encoding: 'utf8',
+    })
+    assert.doesNotMatch(shipped, /wip\.txt/)
+  })
+})
+
 describe('pushing the commit and the tag', () => {
   it('sends them as one transaction', () => {
     // --follow-tags decides which refs go; --atomic decides whether they go together.

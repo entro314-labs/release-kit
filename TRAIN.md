@@ -11,15 +11,10 @@ readable, vendorable, zero dependencies.
 
 **Status.** Discovery, graph derivation, registry-aware change detection, cascade,
 planning, whole-train preflight, execution, `seed-tags` and the train summary work, for
-every member that is **the only member in its git repository** — a meta-workspace of
-sibling repositories, the topology nothing mainstream covers. Not built yet, and refused
-or not claimed rather than approximated:
+both topologies: a member alone in its repository releases exactly as standalone
+release-kit would, and a member sharing its repository with others releases with
+release-kit's `--package`. Not built yet, and not claimed:
 
-- **Several members in one repository** (a monorepo, or a nested monorepo inside a
-  meta-workspace). release-kit releases a whole repository: it reads every commit in it,
-  tags `<prefix><version>`, publishes from the root, and refuses a nested package. The
-  train refuses such a member in preflight, whole train, before anything mutates. Releasing
-  one needs a per-directory mode in release-kit — see Open questions.
 - Taking `packages` from `pnpm-workspace.yaml` / `workspaces` when the config omits it (the
   config must list them today).
 - The two per-package authentication checks in the preflight table (publish CLI and `gh`)
@@ -227,17 +222,23 @@ terminal), in topo order, per package:
    dependencies just released, per `rangePolicy`, and commit that in the package's
    repository as `chore(deps): move <name> <range>, …`. Skipped entirely for `workspace:`
    ranges — the package manager rewrites those at publish time, which is the preferred
-   setup inside a workspace. It is a commit of its own, not part of release-kit's release
-   commit: release-kit refuses a dirty tree unless its `commit` step runs, and that step
-   would stage everything and draft a message. The separate commit is deterministic, and
-   it gives a cascade-only release — a package whose only change is its dependency — a
-   commit for its notes to describe.
+   setup inside a workspace. The lockfile governing the package (in its directory, or up
+   to its repository root for a workspace) records those ranges, so it is refreshed by the
+   tool that owns it — `pnpm install --lockfile-only`, `npm install --package-lock-only`,
+   both with `--ignore-scripts` — and rides in the same commit; a stale one would fail the
+   repository's next frozen install. A `yarn.lock` or `bun.lock` the train would have to
+   rewrite is refused in preflight instead of being committed stale. It is a commit of its
+   own, not part of release-kit's release commit: release-kit refuses a dirty tree unless
+   its `commit` step runs, and that step would stage everything and draft a message. The
+   separate commit is deterministic, and it gives a cascade-only release — a package whose
+   only change is its dependency — a commit for its notes to describe.
 2. Run release-kit — the `release.mjs` shipped beside `train.mjs`, one version for the
    whole train — in the package directory with the planned version passed explicitly, so
    release-kit releases exactly what the plan printed: bump, changelog, release commit,
    tag, push, publish, GitHub release — whatever that package's `steps` say. A member
    with `publish: false` runs with `--skip publish`; a Go member, which has no manifest
-   version, runs with `auto`. `--assistant none` on the train is forwarded to every run.
+   version, runs with `auto`; a member that shares its repository runs with `--package`
+   (below). `--assistant none` on the train is forwarded to every run.
 3. If any member still to come depends on this package: poll the registry
    (`npm view name@version version`) every `registryWait.interval` seconds until the new
    version is visible or `registryWait.timeout` elapses. Registries have replication lag;
@@ -245,6 +246,18 @@ terminal), in topo order, per package:
 
 The first failure stops the train and prints what was released, where it stopped, and
 what never started.
+
+**Several members in one repository.** release-kit on its own releases a whole
+repository and refuses a nested package. `--package` releases the directory it runs in
+instead: that directory's `release.config.json`, manifest, changelog, `verify` and publish;
+`git log`, `git status` and the commit step limited to it (`-- .`); and tags
+`<name>@<version>` unless the package's config sets `tagPrefix`. Each member gets its own
+release commit, tag and push, one after another in topological order — release-kit's steps
+unchanged, rather than batched into one commit, which would mean reordering them. A
+member at the repository root that shares it with nested members reads every commit in the
+repository, nested ones included. Inside a pnpm/npm workspace, internal ranges should be
+`workspace:` and the member's publish command `pnpm publish` (or its equivalent), which is
+what rewrites them into real ranges; a bare `npm publish` ships `workspace:` verbatim.
 
 **Report.** What released at which version, what was skipped and why, and — on failure —
 exactly which packages completed, so the resume story ("run it again") is verifiable.
@@ -354,13 +367,10 @@ Flag rules, mirroring release-kit's posture:
 
 ## Open questions
 
-- **Several members in one repository** — refused today (see Status). Releasing one needs
-  release-kit to release a directory rather than a repository: its config, manifest,
-  changelog and publish from that directory, commits read with `-- <dir>`, tags as
-  `<name>@<version>`, and the nested-package refusal lifted only when the train asks.
-  Whether the train then batches every member of a repository into one release commit
-  (less commit noise, but release-kit's steps reordered) or releases them one commit each
-  (release-kit unchanged apart from the directory mode) is the remaining decision.
+- **Batching a monorepo's releases into one commit** — each member releases with its own
+  commit today (see Execute). One commit for all of them is less history noise, but needs
+  release-kit to stop before its commit and resume after; worth it only if the per-member
+  commits turn out to be a problem.
 - **GitHub releases in a multi-package repo** — `gh release create` per tag works; whether
   the nested-package changelog path (`packages/x/CHANGELOG.md`) needs anything from
   release-kit beyond cwd-relative resolution needs verification.

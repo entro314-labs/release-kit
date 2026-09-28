@@ -220,6 +220,8 @@ Flags:
                        drafted Conventional Commits message instead of refusing to release
   --preid <id>         prerelease identifier (alpha, beta, rc, next, nightly, canary)
   --dist-tag <name>    override the npm dist-tag (default: derived from the version)
+  --package            release the package in this directory, one of several in the
+                       repository: its own tag (<name>@<version>), commits and publish
   --dry-run            print every step and execute nothing
   --yes, -y            skip the confirmation prompt
   --notes-file <path>  write the resolved release notes to a file for the next tool
@@ -586,7 +588,7 @@ function commitsSinceLastTag(options) {
   // separator keeps multi-line messages parseable when splitting the log back apart.
   // %h first, then the author, then the message: the hash is what links each bullet back
   // to its commit, and the author is what says who is new here.
-  const raw = tryRead('git', ['log', `--format=%h%x1f%an%x1f%ae%x1f%B%x1e`, range]) ?? ''
+  const raw = tryRead('git', ['log', `--format=%h%x1f%an%x1f%ae%x1f%B%x1e`, range, ...SCOPE]) ?? ''
   const commits = raw
     .split('\u001E')
     .map((entry) => entry.trim())
@@ -2201,7 +2203,16 @@ const VALUE_OPTIONS = new Set([
 ])
 
 /** Flags that take no value. With VALUE_OPTIONS, the whole vocabulary this file accepts. */
-const BOOLEAN_FLAGS = new Set(['--dry-run', '--yes', '-y', '--commit', '--help', '-h', '--sync'])
+const BOOLEAN_FLAGS = new Set([
+  '--dry-run',
+  '--yes',
+  '-y',
+  '--commit',
+  '--package',
+  '--help',
+  '-h',
+  '--sync',
+])
 
 /** The version or bump target: the only argument that is neither a flag nor a flag's value. */
 const positionals = []
@@ -2252,21 +2263,34 @@ if (requestedPreid !== undefined && !target?.startsWith('pre')) {
 const root = tryRead('git', ['rev-parse', '--show-toplevel'])
 if (!root) abort('not inside a git repository')
 
-// A release is scoped to the repository: the version, the tag and the push all belong to
-// one git history, so the package released is the one at the git root. Refuse when invoked
-// from a nested package instead — silently releasing the parent is the worse outcome.
+/**
+ * A release is scoped to the repository: the version, the tag and the push all belong to
+ * one git history, so the package released is the one at the git root. `--package` scopes
+ * it to the working directory instead — one package among several in the repository, as
+ * release-train runs it. Its config, manifest, changelog, verify and publish are that
+ * directory's; the commits it reads and the working tree it checks are limited to the
+ * directory; and it tags `<name>@<version>` unless its config names a `tagPrefix`, so
+ * packages sharing a history keep separate tags.
+ */
+const packageMode = flag('--package')
+
+// Without --package, refuse a nested package rather than silently releasing the parent.
 const localManifest = resolve('package.json')
 const rootManifest = join(root, 'package.json')
-if (existsSync(localManifest) && localManifest !== rootManifest) {
+if (!packageMode && existsSync(localManifest) && localManifest !== rootManifest) {
   abort(
     `${relative(root, localManifest)} is a nested package, but a release covers the whole ` +
       `repository.\n\n  Running here would release ${
         existsSync(rootManifest) ? readJson(rootManifest).name : 'the repository root'
       } instead.\n` +
-      '  release-kit handles one package per repository; it does not release workspace members.',
+      '  To release this package on its own — its own tag, commits, changelog and publish —\n' +
+      '  run with --package (release-train does, for a repository holding several).',
   )
 }
-process.chdir(root)
+if (!packageMode) process.chdir(root)
+
+/** The pathspec a package release limits `git log`, `git status` and `git add` to. */
+const SCOPE = packageMode ? ['--', '.'] : []
 
 const userConfig = readUserConfig()
 const config = { ...DEFAULTS, ...userConfig }
@@ -2502,6 +2526,19 @@ function versionFromLastTag() {
   return releaseTags()[0]?.version ?? null
 }
 
+// A package's tags are `<name>@<version>`, the scheme release-train reads, unless its
+// config names a prefix. Set before anything reads a tag.
+if (packageMode && !Object.hasOwn(userConfig, 'tagPrefix')) {
+  const name = manifest?.name ?? (versionFile ? readNameFrom(versionFile) : null)
+  if (!name) {
+    abort(
+      '--package tags a release <name>@<version>, and no package name was found here.\n' +
+        '  Set "tagPrefix" in this package\'s release.config.json.',
+    )
+  }
+  config.tagPrefix = `${name}@`
+}
+
 const currentVersion = versionFile ? readVersionFrom(versionFile) : versionFromLastTag()
 if (versionFile && !currentVersion) {
   abort(`could not read a version from ${versionFile.path}`)
@@ -2515,7 +2552,10 @@ const goModule = existsSync('go.mod')
   ? (/^module\s+(\S+)/m.exec(readFileSync('go.mod', 'utf8'))?.[1] ?? null)
   : null
 const projectName =
-  manifest?.name ?? (versionFile ? readNameFrom(versionFile) : null) ?? goModule ?? basename(root)
+  manifest?.name ??
+  (versionFile ? readNameFrom(versionFile) : null) ??
+  goModule ??
+  basename(process.cwd())
 
 /**
  * Manifests found beside the primary one that carry the same version. Detected only when
@@ -2851,7 +2891,7 @@ let unfinishedAtHead = null
  * ship a tree the tag does not describe; that work belongs in the next version, which is
  * what the shipped-tag baseline makes sure it is released as.
  */
-const wouldCommitMore = !!tryRead('git', ['status', '--porcelain']) && runs('commit')
+const wouldCommitMore = !!tryRead('git', ['status', '--porcelain', ...SCOPE]) && runs('commit')
 
 let version
 if (!target) {
@@ -2980,12 +3020,15 @@ function runHook(name) {
  */
 function dirtyPaths() {
   return (
-    (tryRead('git', ['status', '--porcelain']) ?? '')
+    (tryRead('git', ['status', '--porcelain', ...SCOPE]) ?? '')
       .split('\n')
       .map((line) => /^\s*\S{1,2}\s+(.+)$/.exec(line)?.[1]?.trim())
       .filter(Boolean)
       // A rename reads as "old -> new"; the new path is the one to stage.
       .map((path) => path.split(' -> ').at(-1))
+      // Porcelain paths are relative to the repository root; everything they are compared
+      // with and staged as is relative to the working directory, which --package moves.
+      .map((path) => relative(process.cwd(), join(root, path)))
   )
 }
 
@@ -3196,7 +3239,7 @@ if (bumping && currentVersion && compareVersions(version, currentVersion) <= 0) 
   ok(`releasing ${version} (no version file; the tag is the version)`)
 }
 
-const dirty = tryRead('git', ['status', '--porcelain'])
+const dirty = tryRead('git', ['status', '--porcelain', ...SCOPE])
 if (dirty === null) fail('could not read git status')
 else if (dirty && runs('commit')) {
   const entries = dirty.split('\n')
@@ -3946,7 +3989,7 @@ let commitMessage = null
 let didStage = false
 if (dirty && runs('commit') && !dryRun) {
   step('Stage the working tree')
-  mutate('git', ['add', '--all'])
+  mutate('git', ['add', '--all', ...SCOPE])
   didStage = true
   commitMessage = assistant ? draftCommitMessage() : null
   if (!commitMessage) {

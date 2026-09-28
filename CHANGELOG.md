@@ -14,9 +14,16 @@ All notable changes to @entro314labs/release-kit.
   one depends on is waited for on the registry (`registryWait`, now validated). The first
   failure stops the train with what was released, where it stopped and what never
   started; running the same command again resumes. `publish: false` members release
-  without publishing, and `--assistant none` reaches every package. A member that shares
-  its git repository with other members is refused in preflight — release-kit releases a
-  whole repository — and `--offline` is refused outside `--dry-run`.
+  without publishing, and `--assistant none` reaches every package. The npm or pnpm
+  lockfile that records a moved range is refreshed into the same commit (a yarn or bun
+  lockfile is refused in preflight instead of being committed stale), and `--offline` is
+  refused outside `--dry-run`.
+- **`--package` releases one package of several in a repository.** Run in the package's
+  directory, it uses that directory's config, manifest, changelog, `verify` and publish,
+  limits the commits it reads and the working tree it checks and commits to the directory,
+  and tags `<name>@<version>` unless the package sets `tagPrefix`. release-train passes it
+  for every member that shares its repository with others. Without it, a nested package is
+  still refused — and the refusal now names the flag.
 
 ### Fixed
 

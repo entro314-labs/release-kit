@@ -186,22 +186,23 @@ Prerelease bumps need `--preid` unless the current version already carries one t
 
 ### Flags
 
-| Flag                         | Effect                                                                                       |
-| ---------------------------- | -------------------------------------------------------------------------------------------- |
-| `--only <steps>`             | Run only these steps, comma-separated.                                                       |
-| `--skip <steps>`             | Run every step except these.                                                                 |
-| `--commit`                   | Force the `commit` step on when a `steps` config removed it.                                 |
-| `--dry-run`                  | Print every step, execute nothing. Preflight still runs and still reports.                   |
-| `--yes`, `-y`                | Skip the confirmation prompt.                                                                |
-| `--preid <id>`               | Prerelease identifier for a `pre*` bump: `alpha`, `beta`, `rc`, `next`, `nightly`, `canary`. |
-| `--dist-tag <name>`          | Override the npm dist-tag. Always wins over the derived one.                                 |
-| `--notes <source>`           | Where notes come from: `auto`, `changelog`, `assistant`, `commits`, `github`.                |
-| `--notes-file <path>`        | Write the resolved notes to a file for the next tool — see `notesFile`.                      |
-| `--assistant <name>`         | Drafting CLI: `auto`, `none`, `claude`, `codex`.                                             |
-| `--assistant-model <name>`   | Model the assistant runs with.                                                               |
-| `--assistant-effort <level>` | Reasoning effort the assistant runs with.                                                    |
-| `--sync <dir>...`            | Copy this script into other projects and exit. Touches no git state.                         |
-| `--help`, `-h`               | Full flag list.                                                                              |
+| Flag                         | Effect                                                                                                                                                                                                                                                                                                         |
+| ---------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `--only <steps>`             | Run only these steps, comma-separated.                                                                                                                                                                                                                                                                         |
+| `--skip <steps>`             | Run every step except these.                                                                                                                                                                                                                                                                                   |
+| `--commit`                   | Force the `commit` step on when a `steps` config removed it.                                                                                                                                                                                                                                                   |
+| `--package`                  | Release the package in this directory, one of several in the repository: its `release.config.json`, manifest, changelog and publish; commits and working tree limited to the directory; tagged `<name>@<version>` unless `tagPrefix` is set. release-train passes it. Without it, a nested package is refused. |
+| `--dry-run`                  | Print every step, execute nothing. Preflight still runs and still reports.                                                                                                                                                                                                                                     |
+| `--yes`, `-y`                | Skip the confirmation prompt.                                                                                                                                                                                                                                                                                  |
+| `--preid <id>`               | Prerelease identifier for a `pre*` bump: `alpha`, `beta`, `rc`, `next`, `nightly`, `canary`.                                                                                                                                                                                                                   |
+| `--dist-tag <name>`          | Override the npm dist-tag. Always wins over the derived one.                                                                                                                                                                                                                                                   |
+| `--notes <source>`           | Where notes come from: `auto`, `changelog`, `assistant`, `commits`, `github`.                                                                                                                                                                                                                                  |
+| `--notes-file <path>`        | Write the resolved notes to a file for the next tool — see `notesFile`.                                                                                                                                                                                                                                        |
+| `--assistant <name>`         | Drafting CLI: `auto`, `none`, `claude`, `codex`.                                                                                                                                                                                                                                                               |
+| `--assistant-model <name>`   | Model the assistant runs with.                                                                                                                                                                                                                                                                                 |
+| `--assistant-effort <level>` | Reasoning effort the assistant runs with.                                                                                                                                                                                                                                                                      |
+| `--sync <dir>...`            | Copy this script into other projects and exit. Touches no git state.                                                                                                                                                                                                                                           |
+| `--help`, `-h`               | Full flag list.                                                                                                                                                                                                                                                                                                |
 
 ### Linting commits
 
@@ -761,9 +762,8 @@ release-train               # the same, then confirm and release (--yes without 
 the per-package worker, rewrites internal ranges, and refuses the whole train before
 anything mutates if any package would fail. A `train.config.json` declares only which
 directories are members. Design, configuration and the full pipeline are in
-[TRAIN.md](TRAIN.md). Every member has to be the only member in its git repository — a
-folder of sibling repositories; several members sharing one repository are refused in
-preflight until release-kit can release a directory rather than a repository.
+[TRAIN.md](TRAIN.md). A member that shares its git repository with other members is
+released with `--package`, so each keeps its own `<name>@<version>` tags and changelog.
 
 ## ⚙️ Configuration
 

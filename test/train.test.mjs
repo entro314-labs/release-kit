@@ -156,12 +156,13 @@ test('tagPatternFor: plain v-prefix for single-package repos, name@ for shared r
   assert.deepEqual(tagPatternFor(m, 7), { prefix: '@x/shared@', glob: '@x/shared@*' })
 })
 
-test('tagPatternFor honours the tagPrefix a single-package repo releases with', () => {
-  // release-kit tags with the package's configured prefix; reading history under `v`
-  // would find no tags and plan a cold start for a package with a hundred releases.
+test('tagPatternFor honours the tagPrefix a package releases with, shared repo or not', () => {
+  // release-kit tags with the package's configured prefix, --package included; reading
+  // history under another would find no tags and plan a cold start for a package with a
+  // hundred releases.
   const m = { name: '@x/shared', tagPrefix: 'release-' }
   assert.deepEqual(tagPatternFor(m, 1), { prefix: 'release-', glob: 'release-*' })
-  assert.deepEqual(tagPatternFor(m, 2), { prefix: '@x/shared@', glob: '@x/shared@*' })
+  assert.deepEqual(tagPatternFor(m, 2), { prefix: 'release-', glob: 'release-*' })
 })
 
 test('rewriteRange honours policy and leaves workspace ranges alone', () => {
@@ -618,28 +619,74 @@ test('train refuses --offline outside a dry run, and a registryWait that is not 
   assert.match(bad.output, /registryWait\.timeout must be a positive number/)
 })
 
-test('train refuses members that share a git repository, before anything mutates', () => {
+test('train releases members that share a repository with --package, each under its own tags', () => {
   const ws = mkdtempSync(join(tmpdir(), 'release-train-'))
+  const registry = join(ws, 'registry.txt')
   const repo = makeRepo({
     name: '@t/root',
     parent: ws,
+    config: { publish: null },
     files: {
       'packages/x/package.json': '{\n  "name": "@t/x",\n  "version": "1.0.0"\n}\n',
-      'packages/y/package.json': '{\n  "name": "@t/y",\n  "version": "1.0.0"\n}\n',
+      'packages/y/package.json':
+        '{\n  "name": "@t/y",\n  "version": "2.0.0",\n  "dependencies": {\n    "@t/x": "^1.0.0"\n  }\n}\n',
     },
   })
-  mkdirSync(join(repo.root, 'packages/x/src'), { recursive: true })
-  writeFileSync(join(repo.root, 'packages/x/src/index.js'), 'export {}\n')
+  gitIn(repo.root, 'tag', '-a', '@t/x@1.0.0', '-m', 'x')
+  gitIn(repo.root, 'tag', '-a', '@t/y@2.0.0', '-m', 'y')
+  gitIn(repo.root, 'push', '-q', 'origin', '--tags')
+  writeFileSync(registry, '@t/x@1.0.0\n@t/y@2.0.0\n')
+  writeFileSync(join(repo.root, 'packages/x/index.js'), 'export {}\n')
   gitIn(repo.root, 'add', '-A')
-  gitIn(repo.root, 'commit', '-qm', 'feat: x')
+  gitIn(repo.root, 'commit', '-qm', 'feat: x exports something')
   gitIn(repo.root, 'push', '-q', 'origin', 'main')
   const base = relative(ws, repo.root)
   writeFileSync(
     join(ws, 'train.config.json'),
-    JSON.stringify({ packages: [`${base}/packages/x`, `${base}/packages/y`] }),
+    JSON.stringify({
+      packages: [`${base}/packages/x`, `${base}/packages/y`],
+      registryWait: { timeout: 2, interval: 0.1 },
+    }),
   )
-  const result = runTrain({ ws, registry: join(ws, 'registry.txt'), a: repo }, ['--yes', '--all'])
-  assert.equal(result.status, 1, result.output)
-  assert.match(result.output, /holds 2 train members/)
-  assert.deepEqual(tagsOnRemote(repo), [])
+  const { status, output } = runTrain({ ws, registry, a: repo }, ['--yes'])
+  assert.equal(status, 0, output)
+  assert.deepEqual(tagsOnRemote(repo).sort(), [
+    '@t/x@1.0.0',
+    '@t/x@1.1.0',
+    '@t/y@2.0.0',
+    '@t/y@2.0.1',
+  ])
+  assert.deepEqual(published(registry).slice(2), ['@t/x@1.1.0', '@t/y@2.0.1'])
+  const y = JSON.parse(
+    execFileSync('git', ['--git-dir', repo.remote, 'show', 'main:packages/y/package.json'], {
+      encoding: 'utf8',
+    }),
+  )
+  assert.equal(y.dependencies['@t/x'], '^1.1.0')
+  assert.equal(y.version, '2.0.1')
+  assert.equal(JSON.parse(readFileSync(join(repo.root, 'package.json'), 'utf8')).version, '1.0.0')
+})
+
+test('train refreshes the lockfile that records a rewritten range, in the same commit', () => {
+  const t = makeTrain()
+  writeFileSync(join(t.b.root, 'package-lock.json'), '{\n  "lockfileVersion": 3\n}\n')
+  gitIn(t.b.root, 'add', 'package-lock.json')
+  gitIn(t.b.root, 'commit', '-qm', 'chore: lock')
+  gitIn(t.b.root, 'push', '-q', 'origin', 'main')
+  const { status, output } = runTrain(t, ['--yes'])
+  assert.equal(status, 0, output)
+  const calls = readFileSync(t.a.calls, 'utf8')
+  assert.match(calls, /npm install --package-lock-only --ignore-scripts/)
+})
+
+test('train refuses a lockfile it cannot refresh, before anything mutates', () => {
+  const t = makeTrain()
+  writeFileSync(join(t.b.root, 'yarn.lock'), '# yarn lockfile v1\n')
+  gitIn(t.b.root, 'add', 'yarn.lock')
+  gitIn(t.b.root, 'commit', '-qm', 'chore: lock')
+  gitIn(t.b.root, 'push', '-q', 'origin', 'main')
+  const { status, output } = runTrain(t, ['--yes'])
+  assert.equal(status, 1, output)
+  assert.match(output, /yarn\.lock records the ranges the train rewrites/)
+  assert.deepEqual(tagsOnRemote(t.a), ['v1.0.0'])
 })
