@@ -390,6 +390,7 @@ export function discover(rootDir, config) {
       // The prefix release-kit will tag with, and so the one its history is read under;
       // null when the package's config leaves it to the default (see tagPatternFor).
       tagPrefix: releaseConfig.tagPrefix ?? null,
+      requireGreen: releaseConfig.requireGreen === true,
       ...manifest,
     })
   }
@@ -780,6 +781,17 @@ function preflight({
     if ((repoMemberCounts.get(member.repoDir) ?? 1) > 1 && !member.name && !member.tagPrefix) {
       failures.push(
         `${item.id}: shares ${relative(rootDir, member.repoDir) || '.'} with other members but has no package name to tag with — set "tagPrefix" in its release.config.json`,
+      )
+    }
+    // requireGreen refuses a HEAD CI has not passed. The train moves this member's HEAD
+    // before its turn — its own deps commit, or an earlier member's release commit in the
+    // same repository — so the refusal would come mid-train, after others released.
+    const earlierInRepo = plan
+      .slice(0, plan.indexOf(item))
+      .some((other) => other.member.repoDir === member.repoDir)
+    if (member.requireGreen && (item.rewrites.some((r) => r.to) || earlierInRepo)) {
+      failures.push(
+        `${item.id}: its release.config.json sets requireGreen, and the train commits to its repository before its turn — CI cannot have passed that commit; turn requireGreen off for train releases`,
       )
     }
     // Moving a range makes the lockfile that records it stale, and a frozen install in
@@ -1288,7 +1300,14 @@ function executePlan(plan, { rangePolicy, registryWait, noAssistant, env = proce
         const paths = [member.manifestFile]
         const lock = findLockfile(member)
         if (lock?.tool) {
-          const refresh = spawnSync(lock.tool, lock.args, {
+          // pnpm looks for its workspace by walking up past the repository, and a meta-
+          // workspace root may carry a pnpm-workspace.yaml of its own. A lockfile with no
+          // workspace file beside it is standalone: refresh that one, not a parent's.
+          const args =
+            lock.tool === 'pnpm' && !existsSync(join(lock.dir, 'pnpm-workspace.yaml'))
+              ? [...lock.args, '--ignore-workspace']
+              : lock.args
+          const refresh = spawnSync(lock.tool, args, {
             cwd: lock.dir,
             env,
             encoding: 'utf8',
@@ -1297,10 +1316,7 @@ function executePlan(plan, { rangePolicy, registryWait, noAssistant, env = proce
           if (refresh.status !== 0) {
             process.stderr.write(`${refresh.stdout}${refresh.stderr}`)
             git(member.dir, ['checkout', '--', member.manifestFile], { allowFailure: true })
-            return stop(
-              item,
-              `\`${lock.tool} ${lock.args.join(' ')}\` failed refreshing ${lock.name}`,
-            )
+            return stop(item, `\`${lock.tool} ${args.join(' ')}\` failed refreshing ${lock.name}`)
           }
           paths.push(relative(member.dir, lock.path))
         }

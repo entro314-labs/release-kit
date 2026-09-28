@@ -272,6 +272,11 @@ exactly which packages completed, so the resume story ("run it again") is verifi
 | Registry wait timeout                                                         | Dependency published, dependent untouched | Wait resumes; registry has had more time                                            |
 | Between the version write and its commit (a lockfile refresh or hook failing) | That package's tree is dirty              | Preflight refuses the dirty tree; finish that package with release-kit, then re-run |
 
+A member whose `release.config.json` sets `requireGreen` is refused in preflight when the
+train commits to its repository before its turn (its own `chore(deps)` commit, or an
+earlier member's release in the same repository): CI cannot have passed that commit yet,
+so release-kit would stop the train there, after earlier members had released.
+
 The invariant throughout: at no point does a published package depend on an unpublished
 version, because dependencies always complete first.
 

@@ -690,3 +690,15 @@ test('train refuses a lockfile it cannot refresh, before anything mutates', () =
   assert.match(output, /yarn\.lock records the ranges the train rewrites/)
   assert.deepEqual(tagsOnRemote(t.a), ['v1.0.0'])
 })
+
+test('train refuses a requireGreen member whose HEAD it moves before its turn', () => {
+  const t = makeTrain()
+  writeFileSync(join(t.b.root, 'release.config.json'), '{ "requireGreen": true }\n')
+  gitIn(t.b.root, 'add', 'release.config.json')
+  gitIn(t.b.root, 'commit', '-qm', 'chore: gate on CI')
+  gitIn(t.b.root, 'push', '-q', 'origin', 'main')
+  const { status, output } = runTrain(t, ['--yes'])
+  assert.equal(status, 1, output)
+  assert.match(output, /b: its release\.config\.json sets requireGreen/)
+  assert.deepEqual(tagsOnRemote(t.a), ['v1.0.0'])
+})
