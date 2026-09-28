@@ -1,18 +1,20 @@
 #!/usr/bin/env node
 /**
- * release-train — orchestrated releases for interdependent packages, prototype.
+ * release-train — orchestrated releases for interdependent packages.
  *
- * Implements the read-only phases of TRAIN.md — discover → graph → detect changes →
- * cascade → plan → preflight — plus `seed-tags`, which establishes baseline release tags.
- * Execution (releasing via release-kit) is not implemented yet; `train` without
- * --dry-run says so and exits.
+ * Implements TRAIN.md's pipeline — discover → graph → detect changes → cascade → plan →
+ * preflight → execute → report — plus `seed-tags`, which establishes baseline release tags.
+ * Execution runs the release-kit beside this file once per package, in dependency order.
+ * A package that shares its git repository with other members is refused in preflight:
+ * release-kit releases a repository, not a directory inside one.
  *
+ *   train                    plan + preflight, confirm, release (--yes skips the prompt)
  *   train graph              print the derived dependency graph and topo order
  *   train --dry-run          full plan + whole-train preflight, execute nothing
- *   train --dry-run --all    plan every member, not just changed ones
- *   train --dry-run <id>...  plan these packages and their dependents
+ *   train --all              every member, not just changed ones
+ *   train <id>...            these packages and their dependents
  *   train seed-tags          create baseline tags at each repo's HEAD (--dry-run to preview)
- *   train --offline          skip network work (registry lookups, tag pushes)
+ *   train --offline          skip network work (registry lookups, tag pushes); dry runs only
  *   train --config <path>    config elsewhere than ./train.config.json
  *
  * Reads train.config.json in the working directory. Config declares membership and
@@ -29,7 +31,7 @@
  *   3. The cascade: a dependent of a releasing package joins with at least a patch.
  */
 
-import { execFileSync } from 'node:child_process'
+import { execFileSync, spawnSync } from 'node:child_process'
 import {
   existsSync,
   mkdtempSync,
@@ -40,7 +42,8 @@ import {
 } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { basename, dirname, join, relative, resolve } from 'node:path'
-import { pathToFileURL } from 'node:url'
+import { createInterface } from 'node:readline/promises'
+import { fileURLToPath, pathToFileURL } from 'node:url'
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Small utilities
@@ -206,6 +209,12 @@ export function loadConfig(configPath) {
   if (!RANGE_POLICIES.has(rangePolicy))
     fail(`rangePolicy must be one of: ${[...RANGE_POLICIES].join(', ')}`)
   const registryWait = { timeout: 300, interval: 5, ...config.registryWait }
+  for (const key of ['timeout', 'interval']) {
+    if (typeof registryWait[key] !== 'number' || !(registryWait[key] > 0))
+      fail(`registryWait.${key} must be a positive number of seconds`)
+  }
+  const extraWaitKeys = Object.keys(registryWait).filter((k) => k !== 'timeout' && k !== 'interval')
+  if (extraWaitKeys.length) fail(`unknown registryWait key: ${extraWaitKeys.join(', ')}`)
   const assistant = normalizeAssistant(config.assistant ?? null)
   if (assistant?.error) fail(assistant.error)
   const summaryFile = config.summaryFile ?? null
@@ -216,6 +225,8 @@ export function loadConfig(configPath) {
 
 const KNOWN_FLAGS = new Set([
   '--dry-run',
+  '--yes',
+  '-y',
   '--all',
   '--offline',
   '--config',
@@ -231,6 +242,7 @@ function parseArgs(argv) {
     command: null,
     ids: [],
     dryRun: false,
+    yes: false,
     all: false,
     offline: false,
     configPath: null,
@@ -251,6 +263,7 @@ function parseArgs(argv) {
       const normalized = normalizeAssistant(name)
       args.assistant = normalized?.error ? fail(normalized.error) : normalized
     } else if (arg === '--dry-run') args.dryRun = true
+    else if (arg === '--yes' || arg === '-y') args.yes = true
     else if (arg === '--all') args.all = true
     else if (arg === '--offline') args.offline = true
     else if (arg === '--help' || arg === '-h') args.help = true
@@ -263,6 +276,10 @@ function parseArgs(argv) {
     fail('--all and explicit package ids conflict — pass one or the other')
   if (args.command === 'graph' && (args.all || args.ids.length))
     fail('graph takes no package ids or --all')
+  // A release publishes and waits on the registry; neither is possible offline, and a
+  // train that skipped them would release dependents onto versions nobody can install.
+  if (args.offline && !args.dryRun && args.command === null)
+    fail('--offline cannot release — it skips the registry a train publishes to. Add --dry-run')
   return args
 }
 
@@ -759,6 +776,16 @@ function preflight({
 
   for (const item of plan) {
     const { member, next } = item
+    // release-kit releases a repository: it reads the whole repository's commits, tags
+    // `<prefix><version>`, publishes from the root, and refuses a nested package outright.
+    // A member that shares its repository with others needs a per-directory release it
+    // does not have, so the train refuses it rather than releasing the wrong thing.
+    if ((repoMemberCounts.get(member.repoDir) ?? 1) > 1) {
+      failures.push(
+        `${item.id}: ${relative(rootDir, member.repoDir) || '.'} holds ${repoMemberCounts.get(member.repoDir)} train members — ` +
+          'release-kit releases a whole repository, so a package sharing one cannot be released by the train yet',
+      )
+    }
     if (!member.version) {
       warnings.push(
         `${item.id}: no manifest version (${member.ecosystem}); current version must come from its last release tag`,
@@ -944,7 +971,7 @@ function seedTags({ members, repoMemberCounts, registry, dryRun, offline }) {
  * Markdown report of the whole train: every package with its version movement and why,
  * plus the dependency ripple — which changes pulled which dependents in. Deterministic
  * and buildable from the plan alone; per-package release notes stay per-package
- * (release-kit owns those). `mode` is 'planned' until execution exists.
+ * (release-kit owns those). `mode` says whether the rows were planned or released.
  */
 export function buildSummary(plan, { workspace, date, mode = 'planned' }) {
   const lines = [
@@ -1102,6 +1129,166 @@ function draftAnnouncement(assistant, summaryMarkdown) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// Execute — release-kit once per package, dependencies first
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * The release-kit shipped beside this file. Not the one on PATH and not a copy vendored in
+ * each package: a train is one release, and one release-kit version runs all of it.
+ */
+const RELEASE_KIT = join(dirname(fileURLToPath(import.meta.url)), 'release.mjs')
+
+const DEPENDENCY_MAPS = ['dependencies', 'peerDependencies', 'optionalDependencies']
+
+/**
+ * A package.json with its internal ranges moved to the versions the train is releasing.
+ * Every map that names the dependency is rewritten from its own current range, and
+ * `workspace:` ranges are left to the package manager. Returns null when nothing changes —
+ * the rewrite of a resumed train is already committed.
+ *
+ * @param {string} text  the manifest as read
+ * @param {Map<string, string>} targets  dependency name → the version it releases
+ * @param {string} policy  rangePolicy
+ * @returns {{ text: string, changed: string[] } | null}
+ */
+export function rewriteManifest(text, targets, policy) {
+  const manifest = JSON.parse(text)
+  const changed = new Set()
+  for (const key of DEPENDENCY_MAPS) {
+    for (const [name, version] of targets) {
+      const current = manifest[key]?.[name]
+      if (current === undefined) continue
+      const next = rewriteRange(policy, current, version)
+      if (next === null || next === current) continue
+      manifest[key][name] = next
+      changed.add(`${name} ${next}`)
+    }
+  }
+  if (!changed.size) return null
+  const indent = /^\{\r?\n([ \t]+)"/.exec(text)?.[1] ?? '  '
+  return { text: `${JSON.stringify(manifest, null, indent)}\n`, changed: [...changed] }
+}
+
+/**
+ * The release-kit command line for one plan item. The version is always passed explicitly
+ * — release-kit then releases exactly what the plan printed — except for a package with no
+ * manifest version (Go), whose version only release-kit can read, from its tags.
+ */
+export function releaseArgs(item, { noAssistant = false } = {}) {
+  const args = [item.next ?? 'auto', '--yes']
+  // `publish: false` in the train config: versioned, tagged and released, never published.
+  if (!item.member.publish) args.push('--skip', 'publish')
+  // `--assistant none` is the one assistant value forwarded: a whole-train kill switch.
+  // Forcing a drafting tool onto packages that did not opt in stays impossible.
+  if (noAssistant) args.push('--assistant', 'none')
+  return args
+}
+
+const sleep = (seconds) =>
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, seconds * 1000)
+
+/**
+ * Poll until `name@version` is on the registry. A dependent released before its dependency
+ * is visible fails its own install or publish, and registries replicate with a lag.
+ */
+function waitForRegistry(name, version, { timeout, interval }) {
+  const deadline = Date.now() + timeout * 1000
+  for (;;) {
+    const found = spawnSync('npm', ['view', `${name}@${version}`, 'version'], {
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'pipe'],
+      timeout: 20_000,
+    })
+    if (found.status === 0) return true
+    if (Date.now() + interval * 1000 > deadline) return false
+    sleep(interval)
+  }
+}
+
+/**
+ * Release the plan, in order. Each package: move its internal ranges onto the versions
+ * just released and commit that, run release-kit, then — when a later package depends on
+ * it — wait for the registry to show it. The first failure stops the train; everything
+ * before it is fully released, and a re-run resumes (see TRAIN.md, Failure and resume).
+ *
+ * @returns {{ released: string[], failed: string | null, reason: string | null }}
+ */
+function executePlan(plan, { rangePolicy, registryWait, noAssistant, env = process.env }) {
+  const released = []
+  const nextById = new Map(plan.map((item) => [item.id, item.next]))
+  const stop = (item, reason) => ({ released, failed: item.id, reason })
+
+  for (const [index, item] of plan.entries()) {
+    const { member } = item
+    console.log(`\n━━ ${index + 1}/${plan.length} ${item.id} ${item.next ?? '(version from tag)'}`)
+
+    const targets = new Map(
+      item.rewrites
+        .filter((r) => r.to)
+        .map((r) => [plan.find((p) => p.id === r.dep).member.name, nextById.get(r.dep)]),
+    )
+    if (targets.size) {
+      const manifestPath = join(member.dir, member.manifestFile)
+      const rewritten = rewriteManifest(readFileSync(manifestPath, 'utf8'), targets, rangePolicy)
+      if (rewritten) {
+        writeFileSync(manifestPath, rewritten.text)
+        const subject = `chore(deps): move ${rewritten.changed.join(', ')}`
+        const committed =
+          git(member.dir, ['add', '--', member.manifestFile], { allowFailure: true }) !== null &&
+          git(member.dir, ['commit', '-m', subject, '--', member.manifestFile], {
+            allowFailure: true,
+          }) !== null
+        if (!committed)
+          return stop(item, `could not commit the range rewrite in ${member.manifestFile}`)
+        console.log(`  ${subject}`)
+      }
+    }
+
+    const run = spawnSync(process.execPath, [RELEASE_KIT, ...releaseArgs(item, { noAssistant })], {
+      cwd: member.dir,
+      env,
+      stdio: 'inherit',
+    })
+    if (run.status !== 0) return stop(item, `release-kit exited with ${run.status ?? run.signal}`)
+    released.push(item.id)
+
+    const awaited = plan
+      .slice(index + 1)
+      .some((later) => later.rewrites.some((r) => r.dep === item.id))
+    if (awaited && member.ecosystem === 'npm' && member.publish && member.name && item.next) {
+      console.log(`  waiting for ${member.name}@${item.next} on the registry…`)
+      if (!waitForRegistry(member.name, item.next, registryWait)) {
+        return stop(
+          item,
+          `${member.name}@${item.next} was released but is not on the registry after ${registryWait.timeout}s`,
+        )
+      }
+    }
+  }
+  return { released, failed: null, reason: null }
+}
+
+function printExecution(plan, { released, failed, reason }) {
+  if (!failed) {
+    console.log(
+      `\nTrain released — ${released.length} package${released.length === 1 ? '' : 's'}: ${released.join(', ')}`,
+    )
+    return
+  }
+  const notStarted = plan
+    .map((item) => item.id)
+    .filter((id) => id !== failed && !released.includes(id))
+  console.log(`\nTRAIN STOPPED at ${failed}: ${reason}`)
+  if (released.length) console.log(`  released:    ${released.join(', ')}`)
+  console.log(`  stopped:     ${failed}`)
+  if (notStarted.length) console.log(`  not started: ${notStarted.join(', ')}`)
+  console.log(
+    '\n  Fix the cause and run the same command again: released packages are skipped, and the\n' +
+      `  one that stopped is finished by release-kit from wherever it got to.`,
+  )
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Output
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -1165,16 +1352,18 @@ function printSeedResults(results, dryRun) {
     console.log(`\n${refusedOrErrored} member(s) refused or failed — see above.`)
 }
 
-const HELP = `release-train (prototype — read-only phases, seed-tags, and the train summary)
+const HELP = `release-train — release interdependent packages in dependency order
 
-  train graph               print the derived dependency graph and topo order
+  train                     plan, preflight, confirm, then release everything that changed
+  train --yes               the same without the confirmation prompt (required without a terminal)
   train --dry-run           plan + whole-train preflight, execute nothing
-  train --dry-run --all     plan every member
-  train --dry-run <id>...   plan these packages and their dependents
+  train --all               every member, not just the changed ones
+  train <id>...             these packages and their dependents
+  train graph               print the derived dependency graph and topo order
   train seed-tags           create baseline tags (add --dry-run to preview)
   train --summary <path>    write the train summary (markdown) here; overrides summaryFile
   train --assistant <name>  none (whole-train kill switch), auto, claude, codex
-  train --offline           skip network work (registry lookups, tag pushes)
+  train --offline           skip network work (registry lookups, tag pushes); dry runs only
   train --config <path>     config file (default ./train.config.json)
 `
 
@@ -1182,7 +1371,7 @@ const HELP = `release-train (prototype — read-only phases, seed-tags, and the 
 // Main
 // ─────────────────────────────────────────────────────────────────────────────
 
-function main() {
+async function main() {
   const args = parseArgs(process.argv.slice(2))
   if (args.help) {
     console.log(HELP)
@@ -1224,8 +1413,6 @@ function main() {
     return
   }
 
-  if (!args.dryRun) fail('execution is not implemented yet — run with --dry-run')
-
   const changes = new Map()
   for (const member of members) {
     if (!member.repoDir) continue
@@ -1259,18 +1446,37 @@ function main() {
   })
   printPlan(plan, result)
 
+  let execution = null
+  if (!args.dryRun && !result.failures.length && plan.length) {
+    if (!args.yes) {
+      if (!process.stdin.isTTY)
+        fail('no terminal to confirm on — pass --yes to release the plan above')
+      const readline = createInterface({ input: process.stdin, output: process.stdout })
+      const answer = await readline.question(
+        `\nRelease ${plan.length} package${plan.length === 1 ? '' : 's'} in this order? [y/N] `,
+      )
+      readline.close()
+      if (!/^y(es)?$/i.test(answer.trim())) fail('aborted — nothing was released')
+    }
+    execution = executePlan(plan, {
+      rangePolicy: config.rangePolicy,
+      registryWait: config.registryWait,
+      noAssistant: args.assistant === null,
+    })
+    printExecution(plan, execution)
+  }
+
   // Train summary: deterministic always; announcement drafted only when an assistant is
   // configured (or forced via --assistant) and never blocking. --assistant none is the
-  // whole-train kill switch — when execution lands it is also forwarded to every
-  // release-kit run, and it is the ONLY assistant value that is forwarded: forcing a
-  // drafting tool onto packages that did not opt in stays impossible by design.
+  // whole-train kill switch, and executePlan forwards it to every release-kit run.
   const summaryPath = args.summaryPath ?? config.summaryFile
   if (summaryPath) {
     const date = new Date().toISOString().slice(0, 10)
-    let summary = buildSummary(plan, {
+    const shipped = execution ? plan.filter((item) => execution.released.includes(item.id)) : plan
+    let summary = buildSummary(shipped, {
       workspace: basename(rootDir),
       date,
-      mode: 'planned (dry run)',
+      mode: execution ? 'released' : args.dryRun ? 'planned (dry run)' : 'planned, not released',
     })
     const assistant = resolveAssistant(
       args.assistant === undefined ? config.assistant : args.assistant,
@@ -1287,7 +1493,7 @@ function main() {
     console.log(`\nTrain summary written to ${summaryPath}`)
   }
 
-  process.exitCode = result.failures.length ? 1 : 0
+  process.exitCode = result.failures.length || execution?.failed ? 1 : 0
 }
 
-if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) main()
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) await main()

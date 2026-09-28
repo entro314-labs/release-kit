@@ -4,6 +4,20 @@ All notable changes to @entro314labs/release-kit.
 
 ## [Unreleased]
 
+### Added
+
+- **`release-train` releases.** Until now it planned and preflighted a train and stopped.
+  `release-train` (or `release-train --yes` without a terminal) now confirms the plan and
+  releases it in dependency order: each package's internal ranges are moved onto the
+  versions just released and committed as `chore(deps): move …`, the release-kit beside it
+  runs in the package with the planned version passed explicitly, and a package a later
+  one depends on is waited for on the registry (`registryWait`, now validated). The first
+  failure stops the train with what was released, where it stopped and what never
+  started; running the same command again resumes. `publish: false` members release
+  without publishing, and `--assistant none` reaches every package. A member that shares
+  its git repository with other members is refused in preflight — release-kit releases a
+  whole repository — and `--offline` is refused outside `--dry-run`.
+
 ### Fixed
 
 - **A push the remote rejected no longer sends the tag on its own.** git reports a refused

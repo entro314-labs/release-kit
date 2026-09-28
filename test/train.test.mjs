@@ -1,5 +1,10 @@
 import assert from 'node:assert/strict'
+import { execFileSync, spawnSync } from 'node:child_process'
+import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { dirname, join, relative } from 'node:path'
 import { test } from 'node:test'
+import { fileURLToPath } from 'node:url'
 
 import semver from 'semver'
 
@@ -15,10 +20,13 @@ import {
   planReleases,
   rangeSatisfies,
   registryStatus,
+  releaseArgs,
+  rewriteManifest,
   rewriteRange,
   tagPatternFor,
   topoSort,
 } from '../train.mjs'
+import { makeRepo, tagsOnRemote } from './helpers/repo.mjs'
 
 // ── semver ───────────────────────────────────────────────────────────────────
 
@@ -438,4 +446,200 @@ test('bumpFromCommits reads the same grammar release.mjs parses', () => {
     'the hyphenated footer counts, as it does in release.mjs',
   )
   assert.equal(bumpFromCommits(['just some prose'], '2.0.0'), 'patch', 'unparseable is not a feat')
+})
+
+// ── execution ───────────────────────────────────────────────────────────────
+
+test('rewriteManifest moves every map that names the dependency and keeps the indent', () => {
+  const text =
+    '{\n    "name": "b",\n    "dependencies": { "a": "^1.0.0", "z": "^9.0.0" },\n    "peerDependencies": { "a": "~1.0.0" }\n}\n'
+  const out = rewriteManifest(text, new Map([['a', '1.1.0']]), 'preserve')
+  const manifest = JSON.parse(out.text)
+  assert.equal(manifest.dependencies.a, '^1.1.0')
+  assert.equal(manifest.peerDependencies.a, '~1.1.0')
+  assert.equal(manifest.dependencies.z, '^9.0.0')
+  assert.match(out.text, /^\{\n {4}"name"/)
+  assert.ok(out.text.endsWith('}\n'))
+  assert.deepEqual(out.changed, ['a ^1.1.0', 'a ~1.1.0'])
+})
+
+test('rewriteManifest: nothing to move (a resumed train, a workspace range) is null', () => {
+  const text = '{\n  "dependencies": { "a": "^1.1.0", "w": "workspace:*" }\n}\n'
+  assert.equal(
+    rewriteManifest(
+      text,
+      new Map([
+        ['a', '1.1.0'],
+        ['w', '2.0.0'],
+      ]),
+      'caret',
+    ),
+    null,
+  )
+})
+
+test('releaseArgs: explicit version, --skip publish for publish: false, the assistant kill switch', () => {
+  const member = { publish: true }
+  assert.deepEqual(releaseArgs({ next: '1.1.0', member }), ['1.1.0', '--yes'])
+  assert.deepEqual(releaseArgs({ next: null, member }), ['auto', '--yes'])
+  assert.deepEqual(
+    releaseArgs({ next: '2.0.0', member: { publish: false } }, { noAssistant: true }),
+    ['2.0.0', '--yes', '--skip', 'publish', '--assistant', 'none'],
+  )
+})
+
+const TRAIN_MJS = join(dirname(fileURLToPath(import.meta.url)), '../train.mjs')
+const CHANGELOG = '# Changelog\n\n## [Unreleased]\n'
+const gitIn = (cwd, ...args) =>
+  execFileSync('git', args, { cwd, encoding: 'utf8', stdio: 'pipe' }).trim()
+
+/**
+ * A meta-workspace: sibling repositories, each with a bare remote and a v1.0.0 baseline tag
+ * whose version is on the shared stub registry. `b` depends on `a` at ^1.0.0.
+ */
+function makeTrain({ trainConfig = {}, bPublish = true } = {}) {
+  const ws = mkdtempSync(join(tmpdir(), 'release-train-'))
+  const registry = join(ws, 'registry.txt')
+  const make = (name) => makeRepo({ name, parent: ws, changelog: CHANGELOG })
+  const a = make('@t/a')
+  const b = make('@t/b')
+  const manifest = JSON.parse(readFileSync(join(b.root, 'package.json'), 'utf8'))
+  manifest.dependencies = { '@t/a': '^1.0.0' }
+  writeFileSync(join(b.root, 'package.json'), `${JSON.stringify(manifest, null, 2)}\n`)
+  gitIn(b.root, 'commit', '-qam', 'chore: depend on a')
+  for (const repo of [a, b]) {
+    gitIn(repo.root, 'tag', '-a', 'v1.0.0', '-m', 'v1.0.0')
+    gitIn(repo.root, 'push', '-q', 'origin', 'main', 'v1.0.0')
+  }
+  writeFileSync(registry, '@t/a@1.0.0\n@t/b@1.0.0\n')
+  writeFileSync(
+    join(ws, 'train.config.json'),
+    JSON.stringify({
+      packages: [
+        { path: relative(ws, a.root), id: 'a' },
+        { path: relative(ws, b.root), id: 'b', ...(bPublish ? {} : { publish: false }) },
+      ],
+      registryWait: { timeout: 2, interval: 0.1 },
+      ...trainConfig,
+    }),
+  )
+  // A change to a: a minor for it, a cascade patch for b.
+  writeFileSync(join(a.root, 'feature.txt'), 'x\n')
+  gitIn(a.root, 'add', 'feature.txt')
+  gitIn(a.root, 'commit', '-qm', 'feat: a feature')
+  gitIn(a.root, 'push', '-q', 'origin', 'main')
+  return { ws, registry, a, b }
+}
+
+function runTrain({ ws, registry, a }, args, env = {}) {
+  const result = spawnSync('node', [TRAIN_MJS, ...args], {
+    cwd: ws,
+    encoding: 'utf8',
+    env: { ...process.env, PATH: `${a.bin}:${process.env.PATH}`, NPM_REGISTRY: registry, ...env },
+  })
+  return { status: result.status, output: `${result.stdout}${result.stderr}` }
+}
+
+const published = (registry) => readFileSync(registry, 'utf8').trim().split('\n')
+const remoteManifest = (repo) =>
+  JSON.parse(
+    execFileSync('git', ['--git-dir', repo.remote, 'show', 'main:package.json'], {
+      encoding: 'utf8',
+    }),
+  )
+
+test('train releases dependencies first and moves the dependent onto the new version', () => {
+  const t = makeTrain()
+  const { status, output } = runTrain(t, ['--yes'])
+  assert.equal(status, 0, output)
+  assert.ok(tagsOnRemote(t.a).includes('v1.1.0'), output)
+  assert.ok(tagsOnRemote(t.b).includes('v1.0.1'), output)
+  assert.deepEqual(published(t.registry).slice(2), ['@t/a@1.1.0', '@t/b@1.0.1'])
+  assert.equal(remoteManifest(t.b).dependencies['@t/a'], '^1.1.0')
+  assert.equal(remoteManifest(t.b).version, '1.0.1')
+  assert.match(
+    gitIn(t.b.root, 'log', '--format=%s', 'v1.0.0..v1.0.1'),
+    /chore\(deps\): move @t\/a \^1\.1\.0/,
+  )
+  assert.match(output, /Train released — 2 packages: a, b/)
+})
+
+test('train stops at a failed publish, leaves the dependent untouched, and a re-run finishes', () => {
+  const t = makeTrain()
+  const bHead = gitIn(t.b.root, 'rev-parse', 'HEAD')
+  const failed = runTrain(t, ['--yes'], { NPM_PUBLISH_FAILS_FOR: '@t/a' })
+  assert.equal(failed.status, 1, failed.output)
+  assert.match(failed.output, /TRAIN STOPPED at a/)
+  assert.match(failed.output, /not started: b/)
+  assert.equal(gitIn(t.b.root, 'rev-parse', 'HEAD'), bHead)
+  assert.deepEqual(tagsOnRemote(t.b), ['v1.0.0'])
+
+  const resumed = runTrain(t, ['--yes'])
+  assert.equal(resumed.status, 0, resumed.output)
+  assert.match(resumed.output, /a\s+as-is\s+1\.1\.0 \(as-is\)/)
+  assert.deepEqual(published(t.registry).slice(2), ['@t/a@1.1.0', '@t/b@1.0.1'])
+  assert.deepEqual(tagsOnRemote(t.a), ['v1.0.0', 'v1.1.0'])
+})
+
+test('train stops before a dependent when the dependency never shows on the registry', () => {
+  const t = makeTrain({ trainConfig: { registryWait: { timeout: 0.3, interval: 0.1 } } })
+  const bHead = gitIn(t.b.root, 'rev-parse', 'HEAD')
+  const { status, output } = runTrain(t, ['--yes'], { NPM_PUBLISH_INVISIBLE: '1' })
+  assert.equal(status, 1, output)
+  assert.match(output, /@t\/a@1\.1\.0 was released but is not on the registry after 0\.3s/)
+  assert.equal(gitIn(t.b.root, 'rev-parse', 'HEAD'), bHead)
+})
+
+test('train releases a publish: false member without publishing it', () => {
+  const t = makeTrain({ bPublish: false })
+  const { status, output } = runTrain(t, ['--yes'])
+  assert.equal(status, 0, output)
+  assert.ok(tagsOnRemote(t.b).includes('v1.0.1'), output)
+  assert.ok(!published(t.registry).includes('@t/b@1.0.1'))
+})
+
+test('train refuses to release without --yes when there is no terminal to confirm on', () => {
+  const t = makeTrain()
+  const { status, output } = runTrain(t, [])
+  assert.equal(status, 1, output)
+  assert.match(output, /pass --yes/)
+  assert.deepEqual(tagsOnRemote(t.a), ['v1.0.0'])
+})
+
+test('train refuses --offline outside a dry run, and a registryWait that is not a positive number', () => {
+  const t = makeTrain()
+  assert.match(runTrain(t, ['--offline', '--yes']).output, /--offline cannot release/)
+  writeFileSync(
+    join(t.ws, 'train.config.json'),
+    JSON.stringify({ packages: ['*'], registryWait: { timeout: '5m' } }),
+  )
+  const bad = runTrain(t, ['--dry-run'])
+  assert.equal(bad.status, 1)
+  assert.match(bad.output, /registryWait\.timeout must be a positive number/)
+})
+
+test('train refuses members that share a git repository, before anything mutates', () => {
+  const ws = mkdtempSync(join(tmpdir(), 'release-train-'))
+  const repo = makeRepo({
+    name: '@t/root',
+    parent: ws,
+    files: {
+      'packages/x/package.json': '{\n  "name": "@t/x",\n  "version": "1.0.0"\n}\n',
+      'packages/y/package.json': '{\n  "name": "@t/y",\n  "version": "1.0.0"\n}\n',
+    },
+  })
+  mkdirSync(join(repo.root, 'packages/x/src'), { recursive: true })
+  writeFileSync(join(repo.root, 'packages/x/src/index.js'), 'export {}\n')
+  gitIn(repo.root, 'add', '-A')
+  gitIn(repo.root, 'commit', '-qm', 'feat: x')
+  gitIn(repo.root, 'push', '-q', 'origin', 'main')
+  const base = relative(ws, repo.root)
+  writeFileSync(
+    join(ws, 'train.config.json'),
+    JSON.stringify({ packages: [`${base}/packages/x`, `${base}/packages/y`] }),
+  )
+  const result = runTrain({ ws, registry: join(ws, 'registry.txt'), a: repo }, ['--yes', '--all'])
+  assert.equal(result.status, 1, result.output)
+  assert.match(result.output, /holds 2 train members/)
+  assert.deepEqual(tagsOnRemote(repo), [])
 })

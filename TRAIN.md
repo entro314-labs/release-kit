@@ -9,24 +9,32 @@ Ships in this package as `train.mjs` — a second self-contained, `node:*`-only 
 `release.mjs`, installed as the `release-train` bin. Same design contract as release-kit:
 readable, vendorable, zero dependencies.
 
-**Status: prototype.** Discovery, graph derivation, registry-aware change detection,
-cascade, planning, whole-train preflight, `seed-tags`, and the train summary work.
-Execution (running release-kit per package) is not implemented yet — `train` without
-`--dry-run` says so and exits. Three things the design below describes are not built
-either, and the plan does not claim them: taking `packages` from `pnpm-workspace.yaml` /
-`workspaces` when the config omits it (the config must list them today), and the two
-per-package authentication checks in the preflight table (publish CLI and `gh`), which
-each package's own release-kit run performs when execution lands.
+**Status.** Discovery, graph derivation, registry-aware change detection, cascade,
+planning, whole-train preflight, execution, `seed-tags` and the train summary work, for
+every member that is **the only member in its git repository** — a meta-workspace of
+sibling repositories, the topology nothing mainstream covers. Not built yet, and refused
+or not claimed rather than approximated:
+
+- **Several members in one repository** (a monorepo, or a nested monorepo inside a
+  meta-workspace). release-kit releases a whole repository: it reads every commit in it,
+  tags `<prefix><version>`, publishes from the root, and refuses a nested package. The
+  train refuses such a member in preflight, whole train, before anything mutates. Releasing
+  one needs a per-directory mode in release-kit — see Open questions.
+- Taking `packages` from `pnpm-workspace.yaml` / `workspaces` when the config omits it (the
+  config must list them today).
+- The two per-package authentication checks in the preflight table (publish CLI and `gh`)
+  run in each package's own release-kit preflight, at that package's turn — not up front.
 
 ```sh
+release-train                        # plan + preflight, confirm, release (--yes: no prompt)
 release-train graph                  # print the derived dependency graph and topo order
 release-train --dry-run              # full plan + whole-train preflight, execute nothing
-release-train --dry-run --all       # plan every member, not just changed ones
-release-train --dry-run <id>...     # plan these packages and their dependents
-release-train seed-tags             # baseline tags at each HEAD (--dry-run to preview)
-release-train --summary <path>      # write the train summary; --assistant drafts on top
-release-train --offline             # no network: registry checks skipped, tags not pushed
-release-train --config <path>       # config elsewhere than ./train.config.json
+release-train --all                  # every member, not just changed ones
+release-train <id>...                # these packages and their dependents
+release-train seed-tags              # baseline tags at each HEAD (--dry-run to preview)
+release-train --summary <path>       # write the train summary; --assistant drafts on top
+release-train --offline --dry-run    # no network: registry checks skipped, tags not pushed
+release-train --config <path>        # config elsewhere than ./train.config.json
 ```
 
 ## Problem
@@ -212,35 +220,44 @@ One failure anywhere aborts the entire train before any package releases. This i
 whole safety story for the meta-workspace, where no transaction exists — so it is
 deliberately strict: one dirty repo out of thirty blocks all thirty.
 
-**Execute.** In topo order, per package:
+**Execute.** After a confirmation prompt (`--yes` skips it, and is required without a
+terminal), in topo order, per package:
 
 1. Rewrite internal dependency ranges in this package's manifest to the versions its
-   dependencies just released, per `rangePolicy`. Skipped entirely for `workspace:`
+   dependencies just released, per `rangePolicy`, and commit that in the package's
+   repository as `chore(deps): move <name> <range>, …`. Skipped entirely for `workspace:`
    ranges — the package manager rewrites those at publish time, which is the preferred
-   setup inside a workspace.
-2. Run release-kit in the package directory: bump, changelog, release commit (the range
-   rewrite rides in it), tag, push, publish, GitHub release — whatever that package's
-   `steps` say.
+   setup inside a workspace. It is a commit of its own, not part of release-kit's release
+   commit: release-kit refuses a dirty tree unless its `commit` step runs, and that step
+   would stage everything and draft a message. The separate commit is deterministic, and
+   it gives a cascade-only release — a package whose only change is its dependency — a
+   commit for its notes to describe.
+2. Run release-kit — the `release.mjs` shipped beside `train.mjs`, one version for the
+   whole train — in the package directory with the planned version passed explicitly, so
+   release-kit releases exactly what the plan printed: bump, changelog, release commit,
+   tag, push, publish, GitHub release — whatever that package's `steps` say. A member
+   with `publish: false` runs with `--skip publish`; a Go member, which has no manifest
+   version, runs with `auto`. `--assistant none` on the train is forwarded to every run.
 3. If any member still to come depends on this package: poll the registry
-   (`npm view name@version` or the ecosystem equivalent) until the new version is
-   visible or `registryWait.timeout` elapses. Registries have replication lag; a
-   dependent that publishes or installs too early fails spuriously.
+   (`npm view name@version version`) every `registryWait.interval` seconds until the new
+   version is visible or `registryWait.timeout` elapses. Registries have replication lag;
+   a dependent that publishes or installs too early fails spuriously.
 
-In a monorepo, step 2's commits per package would produce commit noise; there the
-orchestrator batches: all version/changelog/range writes land in one release commit, then
-tags, one push, then publishes in topo order with the same waits.
+The first failure stops the train and prints what was released, where it stopped, and
+what never started.
 
 **Report.** What released at which version, what was skipped and why, and — on failure —
 exactly which packages completed, so the resume story ("run it again") is verifiable.
 
 ## Failure and resume
 
-| Died at                            | State                                     | Re-run does                                           |
-| ---------------------------------- | ----------------------------------------- | ----------------------------------------------------- |
-| Preflight                          | Nothing mutated anywhere                  | Everything, after you fix the reported list           |
-| Mid-package (e.g. publish timeout) | That package partially released           | release-kit's own idempotency finishes it             |
-| Between packages                   | Earlier packages fully released           | Skips them (tag exists, version published), continues |
-| Registry wait timeout              | Dependency published, dependent untouched | Wait resumes; registry has had more time              |
+| Died at                                                                       | State                                     | Re-run does                                                                         |
+| ----------------------------------------------------------------------------- | ----------------------------------------- | ----------------------------------------------------------------------------------- |
+| Preflight                                                                     | Nothing mutated anywhere                  | Everything, after you fix the reported list                                         |
+| Mid-package (e.g. publish timeout)                                            | That package partially released           | release-kit's own idempotency finishes it                                           |
+| Between packages                                                              | Earlier packages fully released           | Skips them (tag exists, version published), continues                               |
+| Registry wait timeout                                                         | Dependency published, dependent untouched | Wait resumes; registry has had more time                                            |
+| Between the version write and its commit (a lockfile refresh or hook failing) | That package's tree is dirty              | Preflight refuses the dirty tree; finish that package with release-kit, then re-run |
 
 The invariant throughout: at no point does a published package depend on an unpublished
 version, because dependencies always complete first.
@@ -315,12 +332,14 @@ Flag rules, mirroring release-kit's posture:
 - `--dry-run` composes with everything: it is always "show me, touch nothing".
 - `--offline` degrades honestly: the plan says which checks were skipped, and seed-tags
   skips npm members it cannot verify rather than guessing.
+- `--offline` plans only: a release publishes and waits on the registry, so `--offline`
+  without `--dry-run` is refused.
+- `--yes` skips the confirmation, as in release-kit; without a terminal it is required.
 - Deliberately absent: a `--bump <type>` override (forcing one bump across packages is
   lockstep by the back door; release one package explicitly instead and let derivation do
-  the rest) and a declared-order override (see Considered and declined). `--yes` arrives
-  with execution, matching release-kit. A `--json` plan output for CI is the one addition
-  under consideration — release-kit writes `$GITHUB_OUTPUT`, and the train's equivalent is
-  a machine-readable plan.
+  the rest) and a declared-order override (see Considered and declined). A `--json` plan
+  output for CI is the one addition under consideration — release-kit writes
+  `$GITHUB_OUTPUT`, and the train's equivalent is a machine-readable plan.
 
 ## Considered and declined
 
@@ -335,10 +354,13 @@ Flag rules, mirroring release-kit's posture:
 
 ## Open questions
 
-- **Monorepo commit batching** — the batched single-commit path shares release-kit's steps
-  but reorders when the commit happens; whether that is a release-kit flag
-  (`--no-commit`, commit handled by caller) or orchestrator-side sequencing needs a
-  decision before implementation.
+- **Several members in one repository** — refused today (see Status). Releasing one needs
+  release-kit to release a directory rather than a repository: its config, manifest,
+  changelog and publish from that directory, commits read with `-- <dir>`, tags as
+  `<name>@<version>`, and the nested-package refusal lifted only when the train asks.
+  Whether the train then batches every member of a repository into one release commit
+  (less commit noise, but release-kit's steps reordered) or releases them one commit each
+  (release-kit unchanged apart from the directory mode) is the remaining decision.
 - **GitHub releases in a multi-package repo** — `gh release create` per tag works; whether
   the nested-package changelog path (`packages/x/CHANGELOG.md`) needs anything from
   release-kit beyond cwd-relative resolution needs verification.

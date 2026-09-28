@@ -162,9 +162,9 @@ Recorded so they are not rediscovered as ideas.
 release-please's `cargo-toml.ts` rewrites the `version` of every path dependency in a
 manifest, not just the package's own. That is exactly what `train.mjs` needs to release a
 Rust workspace in dependency order — and exactly why it is not in `release.mjs`: a single
-package release has no internal ranges to rewrite. It belongs with the orchestrator, when
-the orchestrator's execution phase exists. Recorded in TRAIN.md rather than built now,
-since code with no caller is the thing this repository refuses everywhere else.
+package release has no internal ranges to rewrite. It belongs with the orchestrator, whose
+execution phase now exists but rewrites `package.json` ranges only; the Cargo rewrite is
+recorded in TRAIN.md and waits for a train that has a Rust member depending on another.
 
 ## Open questions
 

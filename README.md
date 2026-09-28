@@ -753,6 +753,7 @@ release with the second bin in this package:
 
 ```sh
 release-train --dry-run     # plan + whole-train preflight, execute nothing
+release-train               # the same, then confirm and release (--yes without a terminal)
 ```
 
 `train.mjs` derives the dependency graph and publish order from the package manifests
@@ -760,8 +761,9 @@ release-train --dry-run     # plan + whole-train preflight, execute nothing
 the per-package worker, rewrites internal ranges, and refuses the whole train before
 anything mutates if any package would fail. A `train.config.json` declares only which
 directories are members. Design, configuration and the full pipeline are in
-[TRAIN.md](TRAIN.md). Prototype status: planning, preflight and `seed-tags` work;
-execution is not wired up yet.
+[TRAIN.md](TRAIN.md). Every member has to be the only member in its git repository — a
+folder of sibling repositories; several members sharing one repository are refused in
+preflight until release-kit can release a directory rather than a repository.
 
 ## ⚙️ Configuration
 

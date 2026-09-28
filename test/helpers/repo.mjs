@@ -25,6 +25,8 @@ const git = (cwd, ...args) => execFileSync('git', args, { cwd, encoding: 'utf8',
  * @param {Record<string,string>} [options.files] extra files to create
  * @param {boolean} [options.manifest] write a package.json; false for a repository whose
  *                                     language has no manifest at all, like a Go module
+ * @param {string} [options.parent]   directory to create the repository in (default: the
+ *                                     system temp dir) — a release train's workspace
  */
 export function makeRepo({
   name = '@scope/demo',
@@ -33,8 +35,9 @@ export function makeRepo({
   changelog,
   files = {},
   manifest = true,
+  parent = tmpdir(),
 } = {}) {
-  const root = mkdtempSync(join(tmpdir(), 'release-kit-repo-'))
+  const root = mkdtempSync(join(parent, 'release-kit-repo-'))
   const remote = `${root}-origin.git`
   const calls = `${root}-calls.log`
 
@@ -99,10 +102,39 @@ exit 0
   // release-kit tells "never published" from "could not ask" by asking both, so the stub
   // has to answer them separately. NPM_PUBLISHED_VERSIONS is the registry's contents, for
   // a test that needs one version on it and another missing.
+  // NPM_REGISTRY names a file of published `name@version` lines, shared by every fixture
+  // that points at it: publish appends the package in the working directory, view answers
+  // from the file. A release train needs that — a dependency it publishes has to become
+  // visible to the lookups that follow. NPM_PUBLISH_FAILS_FOR fails one package's publish;
+  // NPM_PUBLISH_INVISIBLE publishes without the registry ever showing it.
   writeFileSync(
     join(bin, 'npm'),
     `#!/bin/sh
 echo "npm $*" >> "${calls}"
+if [ -n "$NPM_REGISTRY" ]; then
+  touch "$NPM_REGISTRY"
+  case "$1" in
+    publish)
+      name=$(node -p "require('./package.json').name")
+      version=$(node -p "require('./package.json').version")
+      [ "$name" = "$NPM_PUBLISH_FAILS_FOR" ] && { echo "npm error publish failed" >&2; exit 1; }
+      [ -n "$NPM_PUBLISH_INVISIBLE" ] || echo "$name@$version" >> "$NPM_REGISTRY"
+      exit 0 ;;
+    view)
+      if [ "$3" = versions ]; then
+        found=$(grep -F "$2@" "$NPM_REGISTRY" | sed "s|^$2@||")
+        [ -n "$found" ] || { echo "npm error code E404" >&2; exit 1; }
+        printf '[%s]' "$(printf '"%s",' $found | sed 's/,$//')"
+        exit 0
+      fi
+      case "\${2#@}" in
+        *@*) grep -qxF "$2" "$NPM_REGISTRY" && { echo "\${2##*@}"; exit 0; }
+             echo "npm error code E404" >&2; exit 1 ;;
+        *) grep -qF "$2@" "$NPM_REGISTRY" && exit 0
+           echo "npm error code E404" >&2; exit 1 ;;
+      esac ;;
+  esac
+fi
 case "$1" in
   --version) echo "\${NPM_VERSION-11.6.0}"; exit 0 ;;
   whoami) echo "test-npm-user"; exit \${NPM_AUTHED:-0} ;;
