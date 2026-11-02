@@ -37,6 +37,10 @@ All notable changes to @entro314labs/release-kit.
   repository and `git check-ignore` does not ignore it (a tracked file included), and says
   to write it outside the repository or add it to `.gitignore`. A warning, not a refusal:
   the release still runs.
+- **Five preflight refusals now say what to do.** Being on the wrong branch, a missing
+  remote, a tag that exists at another commit, a private `package.json` with an npm publish
+  command, and `notes: "changelog"` with no changelog file each named the problem and
+  stopped, while every other refusal says what fixes it. These five now do too.
 
 ## [2.11.0] - 2026-09-28
 
