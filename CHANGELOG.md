@@ -29,6 +29,15 @@ All notable changes to @entro314labs/release-kit.
   a message saying so. A drafting tool is configured per package, in its
   `release.config.json`.
 
+### Fixed
+
+- **A `notesFile` inside the repository is warned about.** The notes file is written after
+  the release commit, so one at a path git does not ignore was left in the working tree and
+  committed — into the next release. Preflight now warns when the path is inside the
+  repository and `git check-ignore` does not ignore it (a tracked file included), and says
+  to write it outside the repository or add it to `.gitignore`. A warning, not a refusal:
+  the release still runs.
+
 ## [2.11.0] - 2026-09-28
 
 ### Added

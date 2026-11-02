@@ -2066,3 +2066,34 @@ describe('a versionFiles entry with no version in it', () => {
     )
   })
 })
+
+describe('a notesFile inside the repository', () => {
+  const config = (notesFile) => ({ publish: null, steps: ['version', 'tag'], notesFile })
+
+  it('warns that git will commit it into the next release', () => {
+    const repo = makeRepo({ config: config('notes.md') })
+    const { status, stdout } = release(repo, ['minor', '--yes', '--dry-run'])
+    assert.equal(status, 0, stdout)
+    assert.match(
+      stdout,
+      /warn notesFile notes\.md is inside the repository and git does not ignore it/,
+    )
+    assert.match(stdout, /add it to \.gitignore/)
+  })
+
+  it('warns about a tracked one too, since check-ignore never ignores those', () => {
+    const repo = makeRepo({ config: config('notes.md'), files: { 'notes.md': 'old\n' } })
+    const { stdout } = release(repo, ['minor', '--yes', '--dry-run'])
+    assert.match(stdout, /warn notesFile notes\.md is inside the repository/)
+  })
+
+  it('says nothing for an ignored path, or one outside the repository', () => {
+    const ignored = makeRepo({
+      config: config('dist/notes.md'),
+      files: { '.gitignore': 'dist/\n' },
+    })
+    assert.doesNotMatch(release(ignored, ['minor', '--yes', '--dry-run']).stdout, /warn notesFile/)
+    const outside = makeRepo({ config: config(join(tmpdir(), 'release-kit-notes.md')) })
+    assert.doesNotMatch(release(outside, ['minor', '--yes', '--dry-run']).stdout, /warn notesFile/)
+  })
+})

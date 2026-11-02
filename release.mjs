@@ -3922,6 +3922,26 @@ for (const asset of config.assets) {
   else fail(`asset ${asset} does not exist`)
 }
 
+// The notes file is written after the release commit, so one inside the repository that
+// git does not ignore is left in the working tree and committed into the *next* release —
+// a tool reading it from a path git ignores, or from outside the repository, is the
+// intended use. `check-ignore` says no for a tracked file too, which is the same problem.
+const notesFile = requestedNotesFile ?? config.notesFile
+if (notesFile) {
+  const inRepo = relative(root, resolve(notesFile))
+  const underGit = inRepo === '.git' || inRepo.startsWith(`.git${sep}`)
+  if (
+    !inRepo.startsWith('..') &&
+    !underGit &&
+    !succeeds('git', ['check-ignore', '-q', '--', notesFile])
+  ) {
+    warn(
+      `notesFile ${notesFile} is inside the repository and git does not ignore it, so it will be ` +
+        'committed into the next release.\n       Write it outside the repository, or add it to .gitignore.',
+    )
+  }
+}
+
 /**
  * Whether drafted notes still have to be filed in the changelog. A named source (`commits`,
  * `assistant`) drafts even when the section exists — a resume, or one written by hand — and
@@ -4137,7 +4157,6 @@ if (staged.length) {
  * The notes are also in the annotated tag, but reading them back with `%(contents)` embeds
  * the signature when tags are signed — this writes the text itself, with no such trap.
  */
-const notesFile = requestedNotesFile ?? config.notesFile
 if (notesFile) {
   step(`Write release notes to ${notesFile}`)
   if (dryRun) console.log(`  ${yellow('would write')} ${notesFile}`)
