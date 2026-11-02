@@ -824,8 +824,8 @@ Non-interactive by default: the confirmation prompt is skipped when stdin is not
 
 On success it writes to `$GITHUB_OUTPUT`, so later steps can act on what happened instead of
 re-deriving it: `version`, `tag`, `name`, `dist-tag`, `steps`, `published`, `release-url`.
-Nothing is written on a dry run, and an unwritable `$GITHUB_OUTPUT` never fails a release
-that already completed.
+Nothing is written on a dry run, and an unwritable `$GITHUB_OUTPUT` is warned about but
+never fails a release that already completed.
 
 **A tag pushed with `GITHUB_TOKEN` triggers nothing.** GitHub deliberately does not start
 workflows from events caused by the job's own `GITHUB_TOKEN`, so an `on: push: tags` build

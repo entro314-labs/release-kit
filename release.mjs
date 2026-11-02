@@ -4289,8 +4289,10 @@ function emitOutputs() {
         .join('\n')}\n`,
     )
     note(`wrote ${Object.keys(outputs).length} outputs to $GITHUB_OUTPUT`)
-  } catch {
-    // Outputs are a convenience; never fail a completed release over them.
+  } catch (err) {
+    // Outputs are a convenience; never fail a completed release over them — but a
+    // workflow step waiting on them should learn why they never arrived.
+    warn(`could not write outputs to $GITHUB_OUTPUT (${file}): ${err.message}`)
   }
 }
 

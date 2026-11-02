@@ -2123,3 +2123,27 @@ describe('a dry run whose preflight fails', () => {
     assert.match(stdout, /Dry run complete — nothing was changed/)
   })
 })
+
+describe('$GITHUB_OUTPUT', () => {
+  it('warns when it cannot be written, and the release still succeeds', () => {
+    // The write failure was swallowed in an empty catch, so a workflow step waiting on the
+    // outputs found nothing and had no idea why.
+    const repo = makeRepo({ config: { publish: null, steps: ['version', 'tag'] } })
+    const unwritable = join(`${repo.root}-missing-dir`, 'output.txt')
+    const { status, stdout } = release(repo, ['minor', '--yes'], { GITHUB_OUTPUT: unwritable })
+    assert.equal(status, 0, stdout)
+    assert.match(
+      stdout,
+      /warn could not write outputs to \$GITHUB_OUTPUT \(.*output\.txt\): ENOENT/,
+    )
+    assert.match(stdout, /Released v1\.1\.0/)
+  })
+
+  it('writes the outputs when it can', () => {
+    const repo = makeRepo({ config: { publish: null, steps: ['version', 'tag'] } })
+    const out = `${repo.root}-output.txt`
+    const { status, stdout } = release(repo, ['minor', '--yes'], { GITHUB_OUTPUT: out })
+    assert.equal(status, 0, stdout)
+    assert.match(readFileSync(out, 'utf8'), /^version=1\.1\.0\ntag=v1\.1\.0\n/)
+  })
+})

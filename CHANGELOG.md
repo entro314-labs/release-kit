@@ -47,6 +47,10 @@ All notable changes to @entro314labs/release-kit.
   a CI rehearsal passed for a release that would abort. It now ends by repeating the failed
   checks under `DRY RUN FAILED` and exits 1; a dry run whose preflight passes still ends
   green with exit 0. Anything gating on a dry run's exit code sees the difference.
+- **A `$GITHUB_OUTPUT` that cannot be written is warned about.** The failure was swallowed,
+  so a workflow step waiting on the outputs found nothing and nothing said why. The release
+  now warns with the path and the error, and still succeeds: the outputs stay a convenience
+  that never fails a completed release.
 
 ## [2.11.0] - 2026-09-28
 
