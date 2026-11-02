@@ -42,7 +42,7 @@ limit during development. Treat it as untested until someone runs a release with
   and catastrophic for anything else; listing a README replaced it with the version. It now
   refuses, and version markers give that file a way to be listed safely.
 
-- **The package shipped no tests.** 188 tests across 8 suites now live in `test/`, run by
+- **The package shipped no tests.** 297 tests across 8 suites now live in `test/`, run by
   `node --test` with no framework: version arithmetic differentially checked against the real
   `semver` package, changelog reading and rolling, commit parsing and bump inference, draft
   sanitising, version-file rewriting including the `Cargo.lock` scoping hazard, and
