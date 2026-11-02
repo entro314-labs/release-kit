@@ -61,8 +61,8 @@ Released v2.5.0
 | [🌍 Any language](#-any-language)                                       | Rust, Python, tag-only, anything        |
 | [🚂 Release trains](#-release-trains)                                   | monorepos and multi-repo workspaces     |
 | [✅ Preflight](#-preflight)                                             | what is checked before anything mutates |
-| [♻️ Recovering from a failed run](#️-recovering-from-a-failed-run)       | why re-running is safe                  |
-| [⚙️ Configuration](#️-configuration)                                     | `release.config.json`, publishing, auth |
+| [♻️ Recovering from a failed run](#️-recovering-from-a-failed-run)      | why re-running is safe                  |
+| [⚙️ Configuration](#️-configuration)                                    | `release.config.json`, publishing, auth |
 | [🔄 Keeping vendored copies in sync](#-keeping-vendored-copies-in-sync) | `--sync`                                |
 | [📋 Requirements](#-requirements)                                       | Node, `git`, `gh`                       |
 

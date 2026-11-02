@@ -49,8 +49,8 @@
     "release": "node release.mjs"
   },
   "devDependencies": {
-    "oxfmt": "^0.70.0",
-    "oxlint": "^1.85.0",
+    "oxfmt": "^0.75.0",
+    "oxlint": "^1.90.0",
     "semver": "^7.8.5"
   },
   "engines": {

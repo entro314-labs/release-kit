@@ -768,7 +768,7 @@ All notable changes to @entro314labs/release-kit.
   its version; the format is inferred from the file name (`.json`, `.toml`, or a plain file
   holding just the version), with a `pattern` escape hatch for anything else. `versionFiles`
   accepts the same entries, so several files stay in sync across formats. `"versionFile":
-null` suits repositories versioned by git tag alone, where the version is passed
+  null` suits repositories versioned by git tag alone, where the version is passed
   explicitly. Only `publish` was ever Node-specific, and it has always been a configurable
   command.
 
@@ -797,7 +797,7 @@ null` suits repositories versioned by git tag alone, where the version is passed
   reachable, each by a different mechanism: a negative flag, a config null, or a positive
   flag. `version`, `tag` and `push` could not be turned off at all.
 - **`steps` decides what runs; every other key describes how a step behaves.** `"publish":
-null` now means "no publish command configured" rather than "skip publishing", and the
+  null` now means "no publish command configured" rather than "skip publishing", and the
   step no-ops with a note. Use `--skip publish` or omit it from `steps` to skip it.
 - The order of steps is fixed. `steps` is a set, not a sequence: publishing before tagging
   or pushing before committing is not expressible.
