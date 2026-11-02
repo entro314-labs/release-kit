@@ -4,6 +4,8 @@ All notable changes to @entro314labs/release-kit.
 
 ## [Unreleased]
 
+## [3.0.0] - 2026-11-02
+
 ### Changed
 
 - **The train plans each version with `release-kit next auto`.** `release-train` inferred
@@ -919,27 +921,28 @@ All notable changes to @entro314labs/release-kit.
 - **`--sync`** to vendor the script into projects that should not depend on the registry
   they are about to publish to.
 
-[Unreleased]: https://github.com/entro314-labs/release-kit/compare/v2.11.0...HEAD
-[2.11.0]: https://github.com/entro314-labs/release-kit/compare/v2.10.0...v2.11.0
-[2.10.0]: https://github.com/entro314-labs/release-kit/compare/v2.9.4...v2.10.0
-[2.9.4]: https://github.com/entro314-labs/release-kit/compare/v2.9.3...v2.9.4
-[2.9.3]: https://github.com/entro314-labs/release-kit/compare/v2.9.2...v2.9.3
-[2.9.2]: https://github.com/entro314-labs/release-kit/compare/v2.9.1...v2.9.2
-[2.9.1]: https://github.com/entro314-labs/release-kit/compare/v2.9.0...v2.9.1
-[2.9.0]: https://github.com/entro314-labs/release-kit/compare/v2.8.0...v2.9.0
-[2.8.0]: https://github.com/entro314-labs/release-kit/compare/v2.7.0...v2.8.0
-[2.7.0]: https://github.com/entro314-labs/release-kit/compare/v2.6.0...v2.7.0
-[2.6.0]: https://github.com/entro314-labs/release-kit/compare/v2.5.0...v2.6.0
-[2.5.0]: https://github.com/entro314-labs/release-kit/compare/v2.4.0...v2.5.0
-[2.4.0]: https://github.com/entro314-labs/release-kit/compare/v2.3.3...v2.4.0
-[2.3.3]: https://github.com/entro314-labs/release-kit/compare/v2.3.2...v2.3.3
-[2.3.2]: https://github.com/entro314-labs/release-kit/compare/v2.3.1...v2.3.2
-[2.3.1]: https://github.com/entro314-labs/release-kit/compare/v2.3.0...v2.3.1
-[2.3.0]: https://github.com/entro314-labs/release-kit/compare/v2.2.2...v2.3.0
-[2.2.2]: https://github.com/entro314-labs/release-kit/compare/v2.2.1...v2.2.2
-[2.2.1]: https://github.com/entro314-labs/release-kit/compare/v2.2.0...v2.2.1
-[2.2.0]: https://github.com/entro314-labs/release-kit/compare/v2.1.0...v2.2.0
-[2.1.0]: https://github.com/entro314-labs/release-kit/compare/v2.0.0...v2.1.0
-[2.0.0]: https://github.com/entro314-labs/release-kit/compare/v1.0.3...v2.0.0
-[1.0.3]: https://github.com/entro314-labs/release-kit/compare/v1.0.1...v1.0.3
-[1.0.1]: https://github.com/entro314-labs/release-kit/releases/tag/v1.0.1
+[Unreleased]: https://github.com/entro314-labs/release-kit/compare/@entro314labs/release-kit@3.0.0...HEAD
+[3.0.0]: https://github.com/entro314-labs/release-kit/compare/@entro314labs/release-kit@2.11.0...@entro314labs/release-kit@3.0.0
+[2.11.0]: https://github.com/entro314-labs/release-kit/compare/@entro314labs/release-kit@2.10.0...@entro314labs/release-kit@2.11.0
+[2.10.0]: https://github.com/entro314-labs/release-kit/compare/@entro314labs/release-kit@2.9.4...@entro314labs/release-kit@2.10.0
+[2.9.4]: https://github.com/entro314-labs/release-kit/compare/@entro314labs/release-kit@2.9.3...@entro314labs/release-kit@2.9.4
+[2.9.3]: https://github.com/entro314-labs/release-kit/compare/@entro314labs/release-kit@2.9.2...@entro314labs/release-kit@2.9.3
+[2.9.2]: https://github.com/entro314-labs/release-kit/compare/@entro314labs/release-kit@2.9.1...@entro314labs/release-kit@2.9.2
+[2.9.1]: https://github.com/entro314-labs/release-kit/compare/@entro314labs/release-kit@2.9.0...@entro314labs/release-kit@2.9.1
+[2.9.0]: https://github.com/entro314-labs/release-kit/compare/@entro314labs/release-kit@2.8.0...@entro314labs/release-kit@2.9.0
+[2.8.0]: https://github.com/entro314-labs/release-kit/compare/@entro314labs/release-kit@2.7.0...@entro314labs/release-kit@2.8.0
+[2.7.0]: https://github.com/entro314-labs/release-kit/compare/@entro314labs/release-kit@2.6.0...@entro314labs/release-kit@2.7.0
+[2.6.0]: https://github.com/entro314-labs/release-kit/compare/@entro314labs/release-kit@2.5.0...@entro314labs/release-kit@2.6.0
+[2.5.0]: https://github.com/entro314-labs/release-kit/compare/@entro314labs/release-kit@2.4.0...@entro314labs/release-kit@2.5.0
+[2.4.0]: https://github.com/entro314-labs/release-kit/compare/@entro314labs/release-kit@2.3.3...@entro314labs/release-kit@2.4.0
+[2.3.3]: https://github.com/entro314-labs/release-kit/compare/@entro314labs/release-kit@2.3.2...@entro314labs/release-kit@2.3.3
+[2.3.2]: https://github.com/entro314-labs/release-kit/compare/@entro314labs/release-kit@2.3.1...@entro314labs/release-kit@2.3.2
+[2.3.1]: https://github.com/entro314-labs/release-kit/compare/@entro314labs/release-kit@2.3.0...@entro314labs/release-kit@2.3.1
+[2.3.0]: https://github.com/entro314-labs/release-kit/compare/@entro314labs/release-kit@2.2.2...@entro314labs/release-kit@2.3.0
+[2.2.2]: https://github.com/entro314-labs/release-kit/compare/@entro314labs/release-kit@2.2.1...@entro314labs/release-kit@2.2.2
+[2.2.1]: https://github.com/entro314-labs/release-kit/compare/@entro314labs/release-kit@2.2.0...@entro314labs/release-kit@2.2.1
+[2.2.0]: https://github.com/entro314-labs/release-kit/compare/@entro314labs/release-kit@2.1.0...@entro314labs/release-kit@2.2.0
+[2.1.0]: https://github.com/entro314-labs/release-kit/compare/@entro314labs/release-kit@2.0.0...@entro314labs/release-kit@2.1.0
+[2.0.0]: https://github.com/entro314-labs/release-kit/compare/@entro314labs/release-kit@1.0.3...@entro314labs/release-kit@2.0.0
+[1.0.3]: https://github.com/entro314-labs/release-kit/compare/@entro314labs/release-kit@1.0.1...@entro314labs/release-kit@1.0.3
+[1.0.1]: https://github.com/entro314-labs/release-kit/releases/tag/@entro314labs/release-kit@1.0.1
