@@ -41,6 +41,12 @@ All notable changes to @entro314labs/release-kit.
   remote, a tag that exists at another commit, a private `package.json` with an npm publish
   command, and `notes: "changelog"` with no changelog file each named the problem and
   stopped, while every other refusal says what fixes it. These five now do too.
+- **A dry run whose preflight fails ends with `DRY RUN FAILED` and exit 1.** It walked the
+  remaining steps past the failures — which it still does, so the whole picture is visible
+  — and then ended with the green "Dry run complete — nothing was changed." and exit 0, so
+  a CI rehearsal passed for a release that would abort. It now ends by repeating the failed
+  checks under `DRY RUN FAILED` and exits 1; a dry run whose preflight passes still ends
+  green with exit 0. Anything gating on a dry run's exit code sees the difference.
 
 ## [2.11.0] - 2026-09-28
 

@@ -2097,3 +2097,29 @@ describe('a notesFile inside the repository', () => {
     assert.doesNotMatch(release(outside, ['minor', '--yes', '--dry-run']).stdout, /warn notesFile/)
   })
 })
+
+describe('a dry run whose preflight fails', () => {
+  it('ends by saying so and exits 1, having changed nothing', () => {
+    // It walked every remaining step past the failures and then ended with the green
+    // "Dry run complete" and exit 0, so a CI rehearsal passed for a release that would abort.
+    const repo = makeRepo({ config: { publish: null, branch: 'release' } })
+    const { status, stdout } = release(repo, ['minor', '--yes', '--dry-run'])
+    assert.equal(status, 1, stdout)
+    assert.match(stdout, /dry run: the above would abort here/)
+    assert.match(
+      stdout,
+      /DRY RUN FAILED — 1 preflight check\(s\) failed:\n {2}- on 'main', expected 'release'/,
+    )
+    assert.match(stdout, /Check out release, or set "branch" in release\.config\.json/)
+    assert.doesNotMatch(stdout, /Dry run complete/)
+    assert.equal(JSON.parse(readFile(repo, 'package.json')).version, '1.0.0')
+    assert.deepEqual(tagsOnRemote(repo), [])
+  })
+
+  it('still ends green and exits 0 when preflight passes', () => {
+    const repo = makeRepo({ config: { publish: null } })
+    const { status, stdout } = release(repo, ['minor', '--yes', '--dry-run'])
+    assert.equal(status, 0, stdout)
+    assert.match(stdout, /Dry run complete — nothing was changed/)
+  })
+})

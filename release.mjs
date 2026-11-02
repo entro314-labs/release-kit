@@ -4006,9 +4006,11 @@ if (config.verify) {
   }
 }
 
-if (problems.length) {
-  const summary = `${problems.length} preflight check(s) failed:\n  - ${problems.join('\n  - ')}`
-  if (!dryRun) abort(summary)
+const preflightSummary = problems.length
+  ? `${problems.length} preflight check(s) failed:\n  - ${problems.join('\n  - ')}`
+  : null
+if (preflightSummary) {
+  if (!dryRun) abort(preflightSummary)
   console.log(
     `\n  ${yellow('dry run: the above would abort here — showing the remaining steps anyway')}`,
   )
@@ -4293,6 +4295,15 @@ function emitOutputs() {
 }
 
 emitOutputs()
+
+// A dry run walks every step past a failed preflight so the whole picture is visible, but
+// the release it rehearsed would have aborted — ending green and exit 0 said otherwise.
+if (preflightSummary) {
+  abort(
+    `${preflightSummary}\n\n  Nothing was changed; the release would abort there.`,
+    'DRY RUN FAILED',
+  )
+}
 
 console.log(
   `\n${green(bold(dryRun ? 'Dry run complete — nothing was changed.' : `Released ${tag}`))}`,
