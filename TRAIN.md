@@ -27,8 +27,9 @@ release-train --dry-run              # full plan + whole-train preflight, execut
 release-train --all                  # every member, not just changed ones
 release-train <id>...                # these packages and their dependents
 release-train seed-tags              # baseline tags at each HEAD (--dry-run to preview)
-release-train --summary <path>       # write the train summary; --assistant drafts on top
-release-train --offline --dry-run    # no network: registry checks skipped, tags not pushed
+release-train --summary <path>       # write the train summary (markdown)
+release-train --assistant none       # forward the kill switch to every release-kit run
+release-train --offline --dry-run    # the train's own registry checks skipped, tags not pushed
 release-train --config <path>        # config elsewhere than ./train.config.json
 ```
 
@@ -188,10 +189,17 @@ least a patch bump, transitively. This is what makes the new dependency version 
 reach consumers. Each package's own bump is derived by release-kit's `auto` from its
 path-scoped commits; the cascade only raises "no release" to "patch", it never lowers.
 
-**Plan.** Topological sort of the release set. The plan is printed before anything runs:
-each package, its current → next version, its bump reason (commits, cascade, or explicit),
-which internal ranges will be rewritten, and the order. `--dry-run` stops here — after
-preflight, so the whole plan and every blocker are visible together, matching release-kit.
+**Plan.** Topological sort of the release set. Each member's next version is release-kit's
+answer, not the train's: `release-kit next auto` (or `next patch` for a cascade-only
+member) runs in the package directory — with `--package` when it shares its repository —
+and whatever it prints is the planned version, so the plan and the release read the same
+commits with the same rules (`Release-As`, `versioning`, `ignoreCommits`, reverts, the
+shipped-tag baseline). A member whose manifest version is pending is planned as-is; one
+release-kit refuses to version is a preflight failure carrying the refusal, never a guessed
+patch. The plan is printed before anything runs: each package, its current → next version,
+its bump reason (commits, cascade, or explicit), which internal ranges will be rewritten,
+and the order. `--dry-run` stops here — after preflight, so the whole plan and every
+blocker are visible together, matching release-kit.
 
 **Preflight (whole train).** For every package in the plan, before anything mutates
 anywhere:
@@ -339,7 +347,8 @@ train react-sdk          # release this package and its dependents only
 train --all              # every member, cold start or forced full train
 train seed-tags          # establish baseline tags, release nothing (--dry-run to preview)
 train graph              # print the derived graph and topo order
-train --offline          # no network: registry checks skipped, tags not pushed
+train --assistant none   # forward the kill switch to every release-kit run (the only value)
+train --offline          # the train's own registry checks skipped, tags not pushed
 train --config <path>    # config file elsewhere than ./train.config.json
 ```
 
@@ -349,9 +358,16 @@ Flag rules, mirroring release-kit's posture:
 - `--all` and explicit package ids conflict and abort; `graph` takes neither.
 - `--dry-run` composes with everything: it is always "show me, touch nothing".
 - `--offline` degrades honestly: the plan says which checks were skipped, and seed-tags
-  skips npm members it cannot verify rather than guessing.
+  skips npm members it cannot verify rather than guessing. It covers the train's own
+  network work only. Planning still runs `release-kit next` in each package, and
+  release-kit has no offline mode: it asks the registry whether the package's last tags
+  shipped, and without a network each lookup fails — npm retries for about a minute
+  before giving up — and release-kit then reads from the newest tag.
 - `--offline` plans only: a release publishes and waits on the registry, so `--offline`
   without `--dry-run` is refused.
+- `--assistant` takes `none` and nothing else: the train drafts no prose of its own, and
+  `none` is forwarded to every release-kit run as a whole-train kill switch. A drafting
+  tool is configured per package, in its `release.config.json`.
 - `--yes` skips the confirmation, as in release-kit; without a terminal it is required.
 - Deliberately absent: a `--bump <type>` override (forcing one bump across packages is
   lockstep by the back door; release one package explicitly instead and let derivation do

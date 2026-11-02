@@ -4,6 +4,31 @@ All notable changes to @entro314labs/release-kit.
 
 ## [Unreleased]
 
+### Changed
+
+- **The train plans each version with `release-kit next auto`.** `release-train` inferred
+  bumps from its own copy of release-kit's Conventional Commits reading, and the copy lacked
+  what the release has — `Release-As`, `versioning`, `ignoreCommits`, reverts, the
+  shipped-tag baseline — so the plan could name a version the release would not produce.
+  Each planned member now gets its version from `release-kit next auto` (or `next patch` for
+  a cascade-only member) run in its directory, `--package` included, and the plan's bump
+  column says `auto` for a commit-driven member. A package release-kit refuses to version is
+  a preflight failure carrying the refusal, not a guessed patch. `--offline` still skips the
+  train's own registry lookups and tag pushes, but release-kit's `next` has no offline mode:
+  it asks the registry whether the package's last tags shipped, and without a network each
+  lookup fails (npm retries for about a minute) before it reads from the newest tag.
+
+### Removed
+
+- **The train's own release announcement.** `release-train` drafted an announcement into
+  the train summary with an assistant of its own — `assistant` in `train.config.json`,
+  `--assistant auto|claude|codex` — through a copy of release-kit's assistant table that had
+  already drifted from it. The summary is now the deterministic report alone, `assistant` is
+  refused as an unknown config key, and `--assistant` takes only `none`: the whole-train
+  kill switch forwarded to every release-kit run, as before. Any other value is refused with
+  a message saying so. A drafting tool is configured per package, in its
+  `release.config.json`.
+
 ## [2.11.0] - 2026-09-28
 
 ### Added

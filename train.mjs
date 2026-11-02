@@ -13,7 +13,7 @@
  *   train --all              every member, not just changed ones
  *   train <id>...            these packages and their dependents
  *   train seed-tags          create baseline tags at each repo's HEAD (--dry-run to preview)
- *   train --offline          skip network work (registry lookups, tag pushes); dry runs only
+ *   train --offline          skip the train's own registry lookups and tag pushes; dry runs only
  *   train --config <path>    config elsewhere than ./train.config.json
  *
  * Reads train.config.json in the working directory. Config declares membership and
@@ -25,21 +25,13 @@
  *      committed but never released, or a package that has never been published — is
  *      released **as-is**: the pending version is the release, nothing is skipped over.
  *      A manifest *behind* the registry is a preflight failure, not a guess.
- *   2. The commits since the package's last release tag, by Conventional Commit rules
- *      (feat → minor, breaking → major, softened below 1.0.0).
+ *   2. The commits since the package's last release tag, read by `release-kit next auto`
+ *      in the package — the inference its release will use, not a copy of it.
  *   3. The cascade: a dependent of a releasing package joins with at least a patch.
  */
 
 import { execFileSync, spawnSync } from 'node:child_process'
-import {
-  existsSync,
-  mkdtempSync,
-  readFileSync,
-  readdirSync,
-  statSync,
-  writeFileSync,
-} from 'node:fs'
-import { tmpdir } from 'node:os'
+import { existsSync, readFileSync, readdirSync, statSync, writeFileSync } from 'node:fs'
 import { basename, dirname, join, relative, resolve } from 'node:path'
 import { createInterface } from 'node:readline/promises'
 import { fileURLToPath, pathToFileURL } from 'node:url'
@@ -113,87 +105,12 @@ export function compareSemver(a, b) {
   return 0
 }
 
-/**
- * The bumps a train plans, with release.mjs `incrementVersion`'s arithmetic for them: a
- * major/minor/patch off a prerelease releases that prerelease's base when the base already
- * satisfies the bump, so `2.0.0-beta.1` + `patch` is `2.0.0` — not the `2.0.1` a naive
- * increment gives, which release-kit would then never produce.
- */
-export function bumpSemver(version, bump) {
-  const v = parseSemver(version)
-  if (!v) return null
-  if (bump === 'as-is') return version
-  const pre = v.prerelease !== null
-  if (bump === 'major') {
-    return pre && v.minor === 0 && v.patch === 0 ? `${v.major}.0.0` : `${v.major + 1}.0.0`
-  }
-  if (bump === 'minor') {
-    return pre && v.patch === 0 ? `${v.major}.${v.minor}.0` : `${v.major}.${v.minor + 1}.0`
-  }
-  return pre ? `${v.major}.${v.minor}.${v.patch}` : `${v.major}.${v.minor}.${v.patch + 1}`
-}
-
-/**
- * A commit subject, by the same grammar release.mjs `parseCommit` reads. The two files are
- * separate bins that share no module — release.mjs releases on import — so this is a
- * deliberate copy, and it has to stay a faithful one: a train that infers a different bump
- * than the release-kit run it delegates to plans a version it will not produce.
- */
-const CONVENTIONAL_SUBJECT = /^([a-z][a-z0-9-]*)(?:\([^)]+\))?(!)?: .+$/i
-
-/**
- * Conventional Commit derivation over full messages: feat → minor, a breaking change
- * (`!` in the type or a BREAKING CHANGE footer) → major, softened to minor below 1.0.0,
- * else patch.
- */
-export function bumpFromCommits(messages, currentVersion) {
-  let bump = 'patch'
-  const below1 = parseSemver(currentVersion)?.major === 0
-  for (const message of messages) {
-    const [subject, ...rest] = message.split('\n')
-    const match = CONVENTIONAL_SUBJECT.exec(subject.trim())
-    if (!match) continue
-    const [, type, bang] = match
-    // Anchored to a line of its own: a body that merely says "not a BREAKING CHANGE" is
-    // prose, and reading it as a footer releases a major nobody asked for.
-    if (bang || /^BREAKING[ -]CHANGE:/m.test(rest.join('\n'))) {
-      return below1 ? 'minor' : 'major'
-    }
-    if (/^feat(ure)?$/.test(type.toLowerCase())) bump = 'minor'
-  }
-  return bump
-}
-
 // ─────────────────────────────────────────────────────────────────────────────
 // Configuration and argument parsing
 // ─────────────────────────────────────────────────────────────────────────────
 
-const CONFIG_KEYS = new Set([
-  '$schema',
-  'packages',
-  'rangePolicy',
-  'registryWait',
-  'summaryFile',
-  'assistant',
-])
+const CONFIG_KEYS = new Set(['$schema', 'packages', 'rangePolicy', 'registryWait', 'summaryFile'])
 const RANGE_POLICIES = new Set(['caret', 'tilde', 'exact', 'preserve'])
-const ASSISTANT_NAMES = new Set(['none', 'auto', 'claude', 'codex'])
-
-/** Normalize an assistant spec (a name, "auto", "none", or { tool, model, effort }). */
-export function normalizeAssistant(spec) {
-  if (spec === null || spec === undefined || spec === 'none') return null
-  const object = typeof spec === 'string' ? { tool: spec } : spec
-  if (
-    typeof object.tool !== 'string' ||
-    !ASSISTANT_NAMES.has(object.tool) ||
-    object.tool === 'none'
-  ) {
-    return {
-      error: `assistant must be one of: ${[...ASSISTANT_NAMES].join(', ')}, or { tool, model, effort }`,
-    }
-  }
-  return { tool: object.tool, model: object.model ?? null, effort: object.effort ?? null }
-}
 
 export function loadConfig(configPath) {
   if (!existsSync(configPath)) fail(`no ${basename(configPath)} found at ${configPath}`)
@@ -214,12 +131,10 @@ export function loadConfig(configPath) {
   }
   const extraWaitKeys = Object.keys(registryWait).filter((k) => k !== 'timeout' && k !== 'interval')
   if (extraWaitKeys.length) fail(`unknown registryWait key: ${extraWaitKeys.join(', ')}`)
-  const assistant = normalizeAssistant(config.assistant ?? null)
-  if (assistant?.error) fail(assistant.error)
   const summaryFile = config.summaryFile ?? null
   if (summaryFile !== null && typeof summaryFile !== 'string')
     fail('summaryFile must be a path or null')
-  return { packages: config.packages, rangePolicy, registryWait, summaryFile, assistant }
+  return { packages: config.packages, rangePolicy, registryWait, summaryFile }
 }
 
 const KNOWN_FLAGS = new Set([
@@ -246,7 +161,7 @@ function parseArgs(argv) {
     offline: false,
     configPath: null,
     summaryPath: null,
-    assistant: undefined, // undefined = no override; null = --assistant none (kill switch)
+    noAssistant: false, // --assistant none: the whole-train kill switch, forwarded to every run
     help: false,
   }
   for (let i = 0; i < argv.length; i++) {
@@ -256,11 +171,18 @@ function parseArgs(argv) {
     } else if (arg === '--summary') {
       args.summaryPath = argv[++i] ?? fail('--summary needs a path')
     } else if (arg === '--assistant') {
-      const name = argv[++i] ?? fail('--assistant needs a name (none, auto, claude, codex)')
-      if (!ASSISTANT_NAMES.has(name))
-        fail(`--assistant must be one of: ${[...ASSISTANT_NAMES].join(', ')}`)
-      const normalized = normalizeAssistant(name)
-      args.assistant = normalized?.error ? fail(normalized.error) : normalized
+      // The train drafts nothing itself. "none" is forwarded to every release-kit run so
+      // one flag silences every package; any other value would force a drafting tool onto
+      // packages that never opted in, which stays impossible.
+      const name = argv[++i] ?? fail('--assistant takes one value: none')
+      if (name !== 'none') {
+        fail(
+          `--assistant ${name}: the train drafts nothing itself, so only "none" is accepted — it ` +
+            `reaches every release-kit run as a kill switch. Configure a drafting tool per package, ` +
+            `in its release.config.json`,
+        )
+      }
+      args.noAssistant = true
     } else if (arg === '--dry-run') args.dryRun = true
     else if (arg === '--yes' || arg === '-y') args.yes = true
     else if (arg === '--all') args.all = true
@@ -609,11 +531,16 @@ export function rangeSatisfies(range, version) {
  * Seeding, in priority order per member:
  *   1. Registry `pending` — an unpublished manifest version is released **as-is**;
  *      the member joins the set even with zero new commits.
- *   2. Explicit request / --all / commits since the last release tag — bump derived
- *      from the commit messages.
+ *   2. Explicit request / --all / commits since the last release tag — `auto` when there
+ *      are commits for release-kit to read, else a patch.
  * Cascade then raises "not releasing" to patch, transitively, through both order and
  * dev edges. A pending member reached by cascade stays as-is: its unpublished version
  * is already the release.
+ *
+ * The version each bump lands on is `resolveNext(member, bump)`'s answer — release-kit's
+ * `next`, run in the package (see `kitNext`) — asked once per member. An `as-is` member's
+ * version is its manifest's, and a member with no manifest version (Go) gets none here:
+ * only release-kit can read it, from the tags, at its turn.
  */
 export function planReleases({
   members,
@@ -624,6 +551,7 @@ export function planReleases({
   requested,
   all,
   rangePolicy,
+  resolveNext,
 }) {
   const byId = new Map(members.map((m) => [m.id, m]))
   const bumps = new Map()
@@ -643,7 +571,7 @@ export function planReleases({
     if (bumps.has(id)) continue // pending wins: the unpublished version is the release
     const change = changes.get(id)
     const messages = change?.commits ?? []
-    bumps.set(id, messages.length ? bumpFromCommits(messages, byId.get(id).version) : 'patch')
+    bumps.set(id, messages.length ? 'auto' : 'patch')
     reasons.set(
       id,
       requested.length
@@ -671,15 +599,22 @@ export function planReleases({
   }
 
   const order = topoSort(orderEdges).filter((id) => bumps.has(id))
+  const resolved = new Map(
+    order.map((id) => {
+      const member = byId.get(id)
+      const bump = bumps.get(id)
+      if (!member.version) return [id, { version: null, error: null }]
+      if (bump === 'as-is') return [id, { version: member.version, error: null }]
+      return [id, resolveNext(member, bump)]
+    }),
+  )
   return order.map((id) => {
     const member = byId.get(id)
-    const bump = bumps.get(id)
-    const next = member.version ? bumpSemver(member.version, bump) : null
+    const { version: next, error } = resolved.get(id)
     const rewrites = (orderEdges.get(id) ?? [])
       .filter((edge) => bumps.has(edge.dep))
       .map((edge) => {
-        const dep = byId.get(edge.dep)
-        const depNext = dep.version ? bumpSemver(dep.version, bumps.get(edge.dep)) : null
+        const depNext = resolved.get(edge.dep).version
         return {
           dep: edge.dep,
           from: edge.range,
@@ -687,7 +622,16 @@ export function planReleases({
         }
       })
       .filter((r) => r.to !== null || r.from.startsWith('workspace:'))
-    return { id, member, bump, current: member.version, next, reason: reasons.get(id), rewrites }
+    return {
+      id,
+      member,
+      bump: bumps.get(id),
+      current: member.version,
+      next,
+      error,
+      reason: reasons.get(id),
+      rewrites,
+    }
   })
 }
 
@@ -807,6 +751,12 @@ function preflight({
           `${item.id}: ${lock.name} has to be refreshed after its ranges move, and ${lock.tool} is not installed`,
         )
       }
+    }
+    // release-kit would not give this package a version — nothing it can release, or
+    // nothing to bump from — and the train does not guess one in its place.
+    if (item.error) {
+      failures.push(`${item.id}: ${item.error}`)
+      continue
     }
     if (!member.version) {
       warnings.push(
@@ -986,7 +936,7 @@ function seedTags({ members, repoMemberCounts, registry, dryRun, offline }) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Train summary — deterministic report, optionally with a drafted announcement
+// Train summary — deterministic report
 // ─────────────────────────────────────────────────────────────────────────────
 
 /**
@@ -1053,103 +1003,6 @@ export function buildSummary(plan, { workspace, date, mode = 'planned' }) {
   return `${lines.join('\n')}\n`
 }
 
-// Assistant invocations mirror release-kit's ASSISTANTS table, so a tool configured for
-// one behaves identically for the other.
-const ASSISTANTS = {
-  claude: {
-    command: 'claude',
-    args: ['-p'],
-    probe: ['--version'],
-    model: (m) => ['--model', m],
-    effort: (e) => ['--effort', e],
-  },
-  codex: {
-    command: 'codex',
-    args: ['exec', '--skip-git-repo-check', '--sandbox', 'read-only'],
-    probe: ['--version'],
-    model: (m) => ['-m', m],
-    effort: (e) => [`-c`, `model_reasoning_effort="${e}"`],
-    outputFile: (path) => ['--output-last-message', path],
-  },
-}
-
-const DRAFT_TIMEOUT_MS = 180_000
-
-/** Strip tool attribution and markdown fences a model may wrap its answer in. */
-function cleanDraft(text) {
-  return text
-    .replace(/^\s*```[a-z]*\s*\n?/i, '')
-    .replace(/\n?```\s*$/, '')
-    .split('\n')
-    .filter(
-      (line) => !/^\s*co-authored-by:/i.test(line) && !/^\s*(🤖\s*)?generated with/i.test(line),
-    )
-    .join('\n')
-    .trim()
-}
-
-function assistantAvailable(tool) {
-  try {
-    execFileSync(ASSISTANTS[tool].command, ASSISTANTS[tool].probe, {
-      stdio: 'ignore',
-      timeout: 10_000,
-    })
-    return true
-  } catch {
-    return false
-  }
-}
-
-/** "auto" → the first tool on PATH; a named tool that is missing is a hard error. */
-function resolveAssistant(spec) {
-  if (!spec) return null
-  if (spec.tool === 'auto') {
-    const found = Object.keys(ASSISTANTS).find((tool) => assistantAvailable(tool))
-    return found ? { ...spec, tool: found } : null // auto degrades quietly by design
-  }
-  if (!assistantAvailable(spec.tool))
-    fail(`assistant "${spec.tool}" is not installed or not working`)
-  return spec
-}
-
-/**
- * Draft a short ecosystem announcement from the deterministic summary. Every failure —
- * timeout, unusable answer, tool error — returns null and the train carries on with the
- * deterministic summary alone. A train is never blocked by a text generator.
- */
-function draftAnnouncement(assistant, summaryMarkdown) {
-  const definition = ASSISTANTS[assistant.tool]
-  const prompt = [
-    'Draft a short release announcement (3-6 sentences, plain prose, no headings) for this',
-    'coordinated multi-package release. Lead with what changed and why consumers care;',
-    'mention the packages by name only where it helps. Output only the announcement text.',
-    '',
-    summaryMarkdown,
-  ].join('\n')
-  const args = [
-    ...definition.args,
-    ...(assistant.model ? definition.model(assistant.model) : []),
-    ...(assistant.effort ? definition.effort(assistant.effort) : []),
-  ]
-  let outputPath = null
-  if (definition.outputFile) {
-    outputPath = join(mkdtempSync(join(tmpdir(), 'train-')), 'answer.md')
-    args.push(...definition.outputFile(outputPath))
-  }
-  try {
-    const stdout = execFileSync(definition.command, args, {
-      input: prompt,
-      encoding: 'utf8',
-      stdio: ['pipe', 'pipe', 'ignore'],
-      timeout: DRAFT_TIMEOUT_MS,
-    })
-    const answer = cleanDraft(outputPath ? readFileSync(outputPath, 'utf8') : stdout)
-    return answer.length >= 20 ? answer : null
-  } catch {
-    return null
-  }
-}
-
 // ─────────────────────────────────────────────────────────────────────────────
 // Execute — release-kit once per package, dependencies first
 // ─────────────────────────────────────────────────────────────────────────────
@@ -1159,6 +1012,29 @@ function draftAnnouncement(assistant, summaryMarkdown) {
  * each package: a train is one release, and one release-kit version runs all of it.
  */
 const RELEASE_KIT = join(dirname(fileURLToPath(import.meta.url)), 'release.mjs')
+
+/**
+ * The version release-kit would release from this package for `bump` — `release-kit next
+ * <bump>` run in its directory, so the plan shows what the release will do rather than
+ * what a copy of its inference guesses. `next` prints the version alone on stdout and
+ * narrates on stderr; a refusal (no releasable commits, no version to bump from) comes
+ * back as the error, for preflight to report against the package.
+ *
+ * @returns {{ version: string | null, error: string | null }}
+ */
+function kitNext(member, bump) {
+  const args = ['next', bump]
+  if (member.sharesRepo) args.push('--package')
+  const run = spawnSync(process.execPath, [RELEASE_KIT, ...args], {
+    cwd: member.dir,
+    encoding: 'utf8',
+    stdio: ['ignore', 'pipe', 'pipe'],
+  })
+  if (run.status === 0) return { version: run.stdout.trim(), error: null }
+  const stderr = (run.stderr ?? '').trim()
+  const reason = /RELEASE ABORTED — ([\s\S]*)$/.exec(stderr)?.[1] ?? stderr.split('\n').at(-1)
+  return { version: null, error: `release-kit next ${bump} refused: ${reason.trim()}` }
+}
 
 const DEPENDENCY_MAPS = ['dependencies', 'peerDependencies', 'optionalDependencies']
 
@@ -1450,8 +1326,8 @@ const HELP = `release-train — release interdependent packages in dependency or
   train graph               print the derived dependency graph and topo order
   train seed-tags           create baseline tags (add --dry-run to preview)
   train --summary <path>    write the train summary (markdown) here; overrides summaryFile
-  train --assistant <name>  none (whole-train kill switch), auto, claude, codex
-  train --offline           skip network work (registry lookups, tag pushes); dry runs only
+  train --assistant none    forward the kill switch to every release-kit run (the only value)
+  train --offline           skip the train's own registry lookups and tag pushes; dry runs only
   train --config <path>     config file (default ./train.config.json)
 `
 
@@ -1521,6 +1397,7 @@ async function main() {
     requested: args.ids,
     all: args.all,
     rangePolicy: config.rangePolicy,
+    resolveNext: kitNext,
   })
   const result = preflight({
     members,
@@ -1550,34 +1427,21 @@ async function main() {
     execution = executePlan(plan, {
       rangePolicy: config.rangePolicy,
       registryWait: config.registryWait,
-      noAssistant: args.assistant === null,
+      noAssistant: args.noAssistant,
     })
     printExecution(plan, execution)
   }
 
-  // Train summary: deterministic always; announcement drafted only when an assistant is
-  // configured (or forced via --assistant) and never blocking. --assistant none is the
-  // whole-train kill switch, and executePlan forwards it to every release-kit run.
+  // Train summary: deterministic, built from the plan alone.
   const summaryPath = args.summaryPath ?? config.summaryFile
   if (summaryPath) {
     const date = new Date().toISOString().slice(0, 10)
     const shipped = execution ? plan.filter((item) => execution.released.includes(item.id)) : plan
-    let summary = buildSummary(shipped, {
+    const summary = buildSummary(shipped, {
       workspace: basename(rootDir),
       date,
       mode: execution ? 'released' : args.dryRun ? 'planned (dry run)' : 'planned, not released',
     })
-    const assistant = resolveAssistant(
-      args.assistant === undefined ? config.assistant : args.assistant,
-    )
-    if (assistant && plan.length) {
-      const announcement = draftAnnouncement(assistant, summary)
-      if (announcement) summary = summary.replace('\n', `\n\n## Announcement\n\n${announcement}\n`)
-      else
-        console.log(
-          `\nwarn  ${assistant.tool} produced no usable announcement — deterministic summary only`,
-        )
-    }
     writeFileSync(resolve(rootDir, summaryPath), summary)
     console.log(`\nTrain summary written to ${summaryPath}`)
   }

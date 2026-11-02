@@ -758,9 +758,10 @@ release-train               # the same, then confirm and release (--yes without 
 ```
 
 `train.mjs` derives the dependency graph and publish order from the package manifests
-(never from declared config), releases dependencies before dependents with release-kit as
-the per-package worker, rewrites internal ranges, and refuses the whole train before
-anything mutates if any package would fail. A `train.config.json` declares only which
+(never from declared config), plans each member's version with `release-kit next auto` run
+in its directory, releases dependencies before dependents with release-kit as the
+per-package worker, rewrites internal ranges, and refuses the whole train before anything
+mutates if any package would fail. A `train.config.json` declares only which
 directories are members. Design, configuration and the full pipeline are in
 [TRAIN.md](TRAIN.md). A member that shares its git repository with other members is
 released with `--package`, so each keeps its own `<name>@<version>` tags and changelog.

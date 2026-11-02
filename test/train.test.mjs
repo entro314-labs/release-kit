@@ -11,11 +11,8 @@ import semver from 'semver'
 import {
   buildGraph,
   buildSummary,
-  bumpFromCommits,
-  bumpSemver,
   compareSemver,
   findCycles,
-  normalizeAssistant,
   parseSemver,
   planReleases,
   rangeSatisfies,
@@ -26,7 +23,7 @@ import {
   tagPatternFor,
   topoSort,
 } from '../train.mjs'
-import { makeRepo, tagsOnRemote } from './helpers/repo.mjs'
+import { makeRepo, RELEASE_MJS, tagsOnRemote } from './helpers/repo.mjs'
 
 // ── semver ───────────────────────────────────────────────────────────────────
 
@@ -41,24 +38,6 @@ test('compareSemver orders versions and ranks prereleases below releases', () =>
   assert.ok(compareSemver('2.4.2', '2.4.1') > 0)
   assert.ok(compareSemver('2.0.0-rc.1', '2.0.0') < 0)
   assert.equal(compareSemver('1.2.3', '1.2.3'), 0)
-})
-
-test('bumpSemver, including as-is', () => {
-  assert.equal(bumpSemver('2.4.2', 'patch'), '2.4.3')
-  assert.equal(bumpSemver('2.4.2', 'minor'), '2.5.0')
-  assert.equal(bumpSemver('2.4.2', 'major'), '3.0.0')
-  assert.equal(bumpSemver('2.4.2', 'as-is'), '2.4.2')
-})
-
-// The train plans what release-kit will run, so its arithmetic has to be release-kit's —
-// which is `semver.inc`'s. A prerelease manifest is where a naive increment diverges: the
-// plan said 2.0.1 for a package release-kit was going to release as 2.0.0.
-test('bumpSemver matches semver.inc off a prerelease, as release-kit does', () => {
-  for (const version of ['1.2.3', '2.0.0-beta.1', '2.0.0-rc.9', '1.2.0-alpha.0', '3.0.0-0']) {
-    for (const bump of ['major', 'minor', 'patch']) {
-      assert.equal(bumpSemver(version, bump), semver.inc(version, bump), `${version} + ${bump}`)
-    }
-  }
 })
 
 test('compareSemver matches semver.compare, prerelease identifiers included', () => {
@@ -83,20 +62,6 @@ test('compareSemver matches semver.compare, prerelease identifiers included', ()
       assert.equal(Math.sign(compareSemver(a, b)), semver.compare(a, b), `${a} vs ${b}`)
     }
   }
-})
-
-test('bumpFromCommits: feat → minor, breaking → major, softened below 1.0.0', () => {
-  assert.equal(bumpFromCommits(['fix: a', 'chore: b'], '2.0.0'), 'patch')
-  assert.equal(bumpFromCommits(['feat(api): add x'], '2.0.0'), 'minor')
-  assert.equal(bumpFromCommits(['feat!: drop node 16'], '2.0.0'), 'major')
-  assert.equal(bumpFromCommits(['feat!: drop node 16'], '0.3.0'), 'minor')
-})
-
-test('bumpFromCommits reads BREAKING CHANGE footers in the body, not just subjects', () => {
-  const message =
-    'fix: adjust parser\n\nRewrites entry API.\n\nBREAKING CHANGE: parse() now returns a tree'
-  assert.equal(bumpFromCommits([message], '2.0.0'), 'major')
-  assert.equal(bumpFromCommits(['feat: adds thing\n\nlong body text'], '2.0.0'), 'minor')
 })
 
 // ── registry status ──────────────────────────────────────────────────────────
@@ -189,6 +154,16 @@ test('rangeSatisfies: caret, tilde, exact, workspace', () => {
 const noRegistry = (members) =>
   new Map(members.map((m) => [m.id, { state: 'unknown', latest: null, versions: null }]))
 
+/**
+ * Stands in for release-kit's `next`: `auto` is read as a minor here, so a plan can be
+ * asserted without a repository. What release-kit really answers is covered by the
+ * integration test that compares the train's plan with `release-kit next auto`.
+ */
+const resolveNext = (member, bump) => ({
+  version: semver.inc(member.version, bump === 'auto' ? 'minor' : bump),
+  error: null,
+})
+
 test('planReleases: change cascades to dependents as patch, in topo order', () => {
   const members = [
     { ...member('shared', '@x/shared'), version: '2.4.2', publish: true },
@@ -212,12 +187,13 @@ test('planReleases: change cascades to dependents as patch, in topo order', () =
     requested: [],
     all: false,
     rangePolicy: 'caret',
+    resolveNext,
   })
   assert.deepEqual(
     plan.map((p) => p.id),
     ['shared', 'sdk', 'cli'],
   )
-  assert.equal(plan[0].bump, 'minor')
+  assert.equal(plan[0].bump, 'auto')
   assert.equal(plan[0].next, '2.5.0')
   assert.equal(plan[1].bump, 'patch')
   assert.equal(plan[1].reason, 'depends on shared')
@@ -253,6 +229,7 @@ test('planReleases: a pending unpublished version is released as-is, even with n
     requested: [],
     all: false,
     rangePolicy: 'caret',
+    resolveNext,
   })
   assert.deepEqual(
     plan.map((p) => p.id),
@@ -281,6 +258,7 @@ test('planReleases: pending wins over commit-derived bumps — nothing is skippe
     requested: [],
     all: false,
     rangePolicy: 'caret',
+    resolveNext,
   })
   assert.equal(plan[0].bump, 'as-is')
   assert.equal(plan[0].next, '2.2.4')
@@ -304,6 +282,7 @@ test('planReleases: rangePolicy flows through to rewrites', () => {
     registry: noRegistry(members),
     requested: [],
     all: false,
+    resolveNext: (member) => ({ version: semver.inc(member.version, 'patch'), error: null }),
   }
   assert.equal(planReleases({ ...base, rangePolicy: 'tilde' })[1].rewrites[0].to, '~1.0.1')
   assert.equal(planReleases({ ...base, rangePolicy: 'exact' })[1].rewrites[0].to, '1.0.1')
@@ -327,6 +306,7 @@ test('planReleases: requested package pulls in dependents, not dependencies', ()
     requested: ['sdk'],
     all: false,
     rangePolicy: 'caret',
+    resolveNext,
   })
   assert.deepEqual(
     plan.map((p) => p.id),
@@ -334,13 +314,13 @@ test('planReleases: requested package pulls in dependents, not dependencies', ()
   )
 })
 
-// ── summary and assistant ────────────────────────────────────────────────────
+// ── summary ──────────────────────────────────────────────────────────────────
 
 test('buildSummary: table rows, as-is rendering, ripple tree, rewrite count', () => {
   const plan = [
     {
       id: 'shared',
-      bump: 'minor',
+      bump: 'auto',
       current: '2.4.2',
       next: '2.5.0',
       reason: '2 commits',
@@ -377,7 +357,7 @@ test('buildSummary: table rows, as-is rendering, ripple tree, rewrite count', ()
   ]
   const summary = buildSummary(plan, { workspace: 'acme', date: '2026-08-18' })
   assert.match(summary, /# Release train — acme/)
-  assert.match(summary, /\| 1 \| shared \| 2\.4\.2 → 2\.5\.0 \| minor \| 2 commits \|/)
+  assert.match(summary, /\| 1 \| shared \| 2\.4\.2 → 2\.5\.0 \| auto \| 2 commits \|/)
   assert.match(summary, /\| 2 \| remark \| 2\.2\.4 \(as-is\) \| as-is \|/)
   assert.match(summary, /## Dependency ripple/)
   assert.match(summary, /- \*\*shared\*\* \(2 commits\) pulled in:\n  - sdk\n    - cli/)
@@ -388,19 +368,6 @@ test('buildSummary: table rows, as-is rendering, ripple tree, rewrite count', ()
 test('buildSummary: empty plan says so', () => {
   const summary = buildSummary([], { workspace: 'acme', date: '2026-08-18' })
   assert.match(summary, /Nothing to release/)
-})
-
-test('normalizeAssistant: none/null clear, names and objects normalize, junk errors', () => {
-  assert.equal(normalizeAssistant(null), null)
-  assert.equal(normalizeAssistant('none'), null)
-  assert.deepEqual(normalizeAssistant('claude'), { tool: 'claude', model: null, effort: null })
-  assert.deepEqual(normalizeAssistant({ tool: 'codex', model: 'gpt-5', effort: 'low' }), {
-    tool: 'codex',
-    model: 'gpt-5',
-    effort: 'low',
-  })
-  assert.ok(normalizeAssistant('gemini').error)
-  assert.ok(normalizeAssistant({ tool: 'none' }).error)
 })
 
 test('planReleases: devDependency edge cascades but never orders', () => {
@@ -422,6 +389,7 @@ test('planReleases: devDependency edge cascades but never orders', () => {
     requested: [],
     all: false,
     rangePolicy: 'caret',
+    resolveNext,
   })
   assert.deepEqual(plan.map((p) => p.id).sort(), ['lib', 'tool'])
   const lib = plan.find((p) => p.id === 'lib')
@@ -429,24 +397,33 @@ test('planReleases: devDependency edge cascades but never orders', () => {
   assert.deepEqual(lib.rewrites, []) // devDeps are not rewritten — they are not published
 })
 
-test('bumpFromCommits reads the same grammar release.mjs parses', () => {
-  // Each of these was mis-read before: the type pattern was [a-z]+ and case-sensitive, and
-  // BREAKING CHANGE was matched anywhere in the message rather than as a footer.
-  assert.equal(bumpFromCommits(['i18n!: drop the legacy locale files'], '2.0.0'), 'major')
-  assert.equal(bumpFromCommits(['a11y(nav)!: remove the skip link'], '2.0.0'), 'major')
-  assert.equal(bumpFromCommits(['Feat: add x'], '2.0.0'), 'minor')
-  assert.equal(bumpFromCommits(['feature: add x'], '2.0.0'), 'minor')
-  assert.equal(
-    bumpFromCommits(['fix: tidy\n\nThis is not a BREAKING CHANGE, just a rename.'], '2.0.0'),
-    'patch',
-    'prose mentioning the phrase is not a footer',
-  )
-  assert.equal(
-    bumpFromCommits(['fix: tidy\n\nBREAKING-CHANGE: parse() returns a tree'], '2.0.0'),
-    'major',
-    'the hyphenated footer counts, as it does in release.mjs',
-  )
-  assert.equal(bumpFromCommits(['just some prose'], '2.0.0'), 'patch', 'unparseable is not a feat')
+test('planReleases: a version release-kit refuses is carried as the error, never guessed', () => {
+  const members = [
+    { ...member('shared', '@x/shared'), version: '1.0.0', publish: true },
+    { ...member('sdk', '@x/sdk', { '@x/shared': '^1.0.0' }), version: '1.0.0', publish: true },
+  ]
+  const { orderEdges, devEdges } = buildGraph(members)
+  const changes = new Map([
+    ['shared', { tag: 'v1.0.0', commits: ['chore: ignored'] }],
+    ['sdk', { tag: 'v1.0.0', commits: [] }],
+  ])
+  const plan = planReleases({
+    members,
+    orderEdges,
+    devEdges,
+    changes,
+    registry: noRegistry(members),
+    requested: [],
+    all: false,
+    rangePolicy: 'caret',
+    resolveNext: (m, bump) =>
+      bump === 'auto'
+        ? { version: null, error: 'release-kit next auto refused: nothing to release' }
+        : resolveNext(m, bump),
+  })
+  assert.equal(plan[0].next, null)
+  assert.match(plan[0].error, /refused/)
+  assert.deepEqual(plan[1].rewrites, []) // no version to move the dependent onto
 })
 
 // ── execution ───────────────────────────────────────────────────────────────
@@ -701,4 +678,54 @@ test('train refuses a requireGreen member whose HEAD it moves before its turn', 
   assert.equal(status, 1, output)
   assert.match(output, /b: its release\.config\.json sets requireGreen/)
   assert.deepEqual(tagsOnRemote(t.a), ['v1.0.0'])
+})
+
+test('the train plans the version release-kit next auto answers in the package', () => {
+  // `Release-As` is what the train's own copy of the inference could never read: the plan
+  // said 1.1.0 for a package release-kit was going to release as 1.5.0.
+  const t = makeTrain()
+  writeFileSync(join(t.a.root, 'pinned.txt'), 'x\n')
+  gitIn(t.a.root, 'add', 'pinned.txt')
+  gitIn(t.a.root, 'commit', '-qm', 'fix: pin the version\n\nRelease-As: 1.5.0')
+  gitIn(t.a.root, 'push', '-q', 'origin', 'main')
+  const { status, output } = runTrain(t, ['--dry-run'])
+  assert.equal(status, 0, output)
+  const planned = /a\s+auto\s+1\.0\.0 → (\S+)/.exec(output)?.[1]
+  const kit = execFileSync('node', [RELEASE_MJS, 'next', 'auto'], {
+    cwd: t.a.root,
+    encoding: 'utf8',
+    env: { ...process.env, PATH: `${t.a.bin}:${process.env.PATH}`, NPM_REGISTRY: t.registry },
+    stdio: ['ignore', 'pipe', 'ignore'],
+  }).trim()
+  assert.equal(planned, kit, output)
+  assert.equal(planned, '1.5.0')
+  assert.match(output, /b\s+patch\s+1\.0\.0 → 1\.0\.1/)
+  assert.match(output, /deps: a \^1\.0\.0 → \^1\.5\.0/)
+})
+
+test('a package release-kit cannot version fails preflight instead of being guessed', () => {
+  const t = makeTrain()
+  // Every subject ignored: the train sees commits, release-kit sees nothing to release.
+  writeFileSync(join(t.a.root, 'release.config.json'), '{ "ignoreCommits": ["."] }\n')
+  gitIn(t.a.root, 'add', 'release.config.json')
+  gitIn(t.a.root, 'commit', '-qm', 'chore: ignore everything')
+  gitIn(t.a.root, 'push', '-q', 'origin', 'main')
+  const { status, output } = runTrain(t, ['--yes'])
+  assert.equal(status, 1, output)
+  assert.match(output, /FAIL {2}a: release-kit next auto refused: no releasable commits/)
+  assert.deepEqual(tagsOnRemote(t.a), ['v1.0.0'])
+})
+
+test('train accepts --assistant none only, and refuses a config that names a drafting tool', () => {
+  const t = makeTrain()
+  const refused = runTrain(t, ['--dry-run', '--assistant', 'claude'])
+  assert.equal(refused.status, 1)
+  assert.match(refused.output, /--assistant claude: the train drafts nothing itself/)
+  writeFileSync(
+    join(t.ws, 'train.config.json'),
+    JSON.stringify({ packages: ['*'], assistant: 'auto' }),
+  )
+  const config = runTrain(t, ['--dry-run'])
+  assert.equal(config.status, 1)
+  assert.match(config.output, /unknown config key: assistant/)
 })
