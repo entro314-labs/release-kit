@@ -173,13 +173,16 @@ about that commit — see [Release notes](#release-notes).
 | `patch`                              | `1.2.4`                                          | `2.0.0`             |
 | `minor`                              | `1.3.0`                                          | `2.0.0`             |
 | `major`                              | `2.0.0`                                          | `2.0.0`             |
+| `auto`                               | `1.2.4` / `1.3.0` / `2.0.0`, by the commits      | `2.0.0`             |
 | `prerelease`                         | `1.2.4-beta.0`                                   | `2.0.0-beta.2`      |
 | `prepatch` / `preminor` / `premajor` | `1.2.4-beta.0` / `1.3.0-beta.0` / `2.0.0-beta.0` | same                |
 | `2.5.0`                              | `2.5.0`                                          | `2.5.0`             |
 
 A `major`/`minor`/`patch` bump off a prerelease releases that prerelease's base version
 when the base already satisfies the bump, so promoting a release candidate is a plain
-`patch`. The arithmetic matches [`semver.inc`](https://github.com/npm/node-semver#functions)
+`patch`. `auto` only ever bumps by one of those three, so from a prerelease it always
+promotes to the stable base — to cut another candidate, ask for `prerelease`. The
+arithmetic matches [`semver.inc`](https://github.com/npm/node-semver#functions)
 exactly, and precedence follows the [SemVer spec](https://semver.org/#spec-item-11).
 
 Prerelease bumps need `--preid` unless the current version already carries one to infer.
