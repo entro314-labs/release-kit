@@ -49,9 +49,9 @@
     "release": "node release.mjs"
   },
   "devDependencies": {
-    "oxfmt": "^0.75.0",
-    "oxlint": "^1.90.0",
-    "semver": "^7.8.5"
+    "oxfmt": "^0.80.0",
+    "oxlint": "^1.95.0",
+    "semver": "^7.8.6"
   },
   "engines": {
     "node": ">=24"
